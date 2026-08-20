@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Wire the `Provider` interface and build three deterministic scan layers — axe-core (WCAG baseline), PatternFly rulepack (eight named rules, design-system semantics), and keyboard walk (role-aware interaction probing) — plus the declarative interaction probe seam that Phase 4 reuses. Deliver a real `CheckRunner` that opens a `Page` per screen via `BrowserDriver`, runs every `Provider`, and assembles the frozen `ScreenScan`. Unit tests use in-memory fakes only; real browser wiring is clearly-labeled integration work.
+**Goal:** Wire the `Provider` interface and build three deterministic scan layers - axe-core (WCAG baseline), PatternFly rulepack (eight named rules, design-system semantics), and keyboard walk (role-aware interaction probing) - plus the declarative interaction probe seam that Phase 4 reuses. Deliver a real `CheckRunner` that opens a `Page` per screen via `BrowserDriver`, runs every `Provider`, and assembles the frozen `ScreenScan`. Unit tests use in-memory fakes only; real browser wiring is clearly-labeled integration work.
+
+**Hard gate from Phase 1 security review:** `formatSummary` prints `whatUserExperiences` and `fix` to stdout with no neutralization. That is parked, not waived. Before this plan's CheckRunner can copy page text into Drafts, implement `neutralize()` and use it in `formatSummary` (and any other egress). Do not defer that to the surfaces plan. A live scan without it ships untrusted page text to the terminal.
 
 **Architecture:**
 - Providers return `Draft[]` only. No provider decides a verdict.
