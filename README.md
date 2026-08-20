@@ -9,6 +9,7 @@ kept out of the product repos on purpose so specs and plans never ship inside th
 tool or its pull requests.
 
 Team operating model: [`roles.md`](roles.md) (founder, CTO, Opus as EM, Codex, Gemini as CISO).
+Quality bar (CTO enforces): [`quality-bar.md`](quality-bar.md).
 Build story (living): [`how-we-built-this.md`](how-we-built-this.md).
 Phase 2 PR map: [`02-slices.md`](02-slices.md) (cut from `main`, do not stack).
 

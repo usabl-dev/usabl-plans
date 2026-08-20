@@ -1,7 +1,8 @@
 # usabl roles
 
-Canonical team operating model. Cursor always-apply summary: `usabl/.cursor/rules/agent-roles.mdc`.
+Canonical team operating model. Agent always-apply summary: `usabl/.cursor/rules/agent-roles.mdc`.
 Security merge gate: `usabl/.cursor/rules/pr-security-review.mdc`.
+Quality bar (CTO enforces as context fills): [`quality-bar.md`](quality-bar.md).
 
 usabl is a contest entry and a product. Roles exist so the bar stays high and nobody
 freelances someone else's job.
@@ -24,7 +25,8 @@ Ed is founder, chief of product, and UX lead until more humans join.
 Oversee and drive. Do not write product code. Do not hide behind process.
 
 - Owns: architecture fidelity, honesty invariants, slice map, briefs, review
-  packages, coaching, push/merge gates.
+  packages, coaching, push/merge gates, and [`quality-bar.md`](quality-bar.md)
+  (the bar does not quietly drop as sessions get long).
 - Send work back. A spec-matching patch that a judge would shrug at is not done.
   Do not implement "just this once." Do not rubber-stamp Codex. Do not freelance
   UX or product naming.

@@ -160,3 +160,9 @@ PRs 8, 9, and 10 squash-merged in order (identity, gate, `run()` / CLI / oracle)
 Phase 1 kernel is on `main`. `buildDeps()` still throws. Neutralize remains the
 hard gate before a live CheckRunner. Phase 2 slice map: [`02-slices.md`](02-slices.md).
 Do not stack those PRs.
+
+### 2026-08-20 - Keep the bar
+
+Wrote [`quality-bar.md`](quality-bar.md). Long sessions forget coaching. Subagents
+start empty. CTO enforces: paste the bar every dispatch, never skip Opus or CISO,
+never self-approve a failed dispatch, experiments allowed, honesty not.
