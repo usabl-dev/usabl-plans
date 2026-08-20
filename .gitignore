@@ -1,0 +1,16 @@
+# Secrets and credentials (never commit)
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*storageState*.json
+
+# Session and tooling state
+.remember/
+.claude/
+.cursor/
+
+# OS / editor cruft
+.DS_Store
+*.swp
