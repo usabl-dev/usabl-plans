@@ -19,13 +19,13 @@ phases depend only on the frozen contracts of earlier ones, never on their inter
 | Plan | Phase |
 |------|-------|
 | [`00-plan-set.md`](00-plan-set.md) | Overview, build order, and cross-phase frozen seams |
-| [`01-core-foundation.md`](01-core-foundation.md) | Phase 1 - contracts, gate, `run()`, receipt, CLI slice, golden oracle |
-| [`02-detection-engine.md`](02-detection-engine.md) | Phase 2 - axe-core, PatternFly rulepack, keyboard walk |
-| [`03-coverage-guard-trust.md`](03-coverage-guard-trust.md) | Phase 3 - coverage planner, git-anchored guard, three-hash receipt |
-| [`04-voicing-lane.md`](04-voicing-lane.md) | Phase 4 - announcement voicing lane (structural gates, voicing preview) |
-| [`05-surfaces.md`](05-surfaces.md) | Phase 5 - CLI, stop hook, CI/PR comment, dev overlay, Playwright helper |
-| [`06-intake-and-docs.md`](06-intake-and-docs.md) | Phase 6 - requirement intake and accessible docs output |
-| [`07-demo-and-measurement.md`](07-demo-and-measurement.md) | Phase 7 - demo fixture flip and real-app measurement |
+| [`01-core-foundation.md`](01-core-foundation.md) | Phase 1: contracts, gate, `run()`, receipt, CLI slice, golden oracle |
+| [`02-detection-engine.md`](02-detection-engine.md) | Phase 2: axe-core, PatternFly rulepack, keyboard walk |
+| [`03-coverage-guard-trust.md`](03-coverage-guard-trust.md) | Phase 3: coverage planner, git-anchored guard, three-hash receipt |
+| [`04-voicing-lane.md`](04-voicing-lane.md) | Phase 4: announcement voicing lane (structural gates, voicing preview) |
+| [`05-surfaces.md`](05-surfaces.md) | Phase 5: CLI, stop hook, CI/PR comment, dev overlay, Playwright helper |
+| [`06-intake-and-docs.md`](06-intake-and-docs.md) | Phase 6: requirement intake and accessible docs output |
+| [`07-demo-and-measurement.md`](07-demo-and-measurement.md) | Phase 7: demo fixture flip and real-app measurement |
 
 ## How to execute a plan
 

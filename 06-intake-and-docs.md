@@ -5,14 +5,28 @@
 **Goal:** Add two capabilities to the usabl engine: (1) a guarded intake path that accepts design and UX handoffs in multiple shapes and normalizes them to a validated `RequirementBundle`, mapping each requirement to a runtime check or a docs-output trigger; and (2) three docs-output generators that project the canonical `Result` plus the `Receipt` into accessible documentation artifacts, each entry bound via `evidenceRef` to the specific receipt evidence that backs it.
 
 **Architecture:**
-- Every intake path calls `normalize(raw, format)` which validates against the Zod `RequirementBundle` schema; any malformed or ambiguous input returns `{ ok: false, verdict: 'approval_required' }` — never a silent default, never a stderr warning.
+- Every intake path calls `normalize(raw, format)` which validates against the Zod `RequirementBundle` schema; any malformed or ambiguous input returns `{ ok: false, verdict: 'approval_required' }`: never a silent default, never a stderr warning.
 - Every docs generator is a pure function `(result, receipt, ...) => DocArtifact`. No network, no file I/O; callers supply deps.
-- `evidenceRef` is a deterministic string — `receipt:{sourceTree}:{screenId}:{discriminator}` — that resolves unambiguously to a specific finding or transcript stop in the receipt's code state. An artifact entry with no backing evidence is emitted with no `evidenceRef`, never with a fabricated one.
+- `evidenceRef` is a deterministic string (`receipt:{sourceTree}:{screenId}:{discriminator}` or `stop:{sourceTree}:{screenId}:{index}`) that resolves unambiguously to evidence in the receipt's code state. The honesty rule is enforceable and enforced: an `evidenceRef` is emitted ONLY when the receipt exists AND the surface appears in `receipt.coverage.checked`. A requirement on a surface the run never checked gets no `evidenceRef`, never a fabricated one.
 - `boundToReceipt: receipt.sourceTree` on every `DocArtifact`. If the tree changes and the receipt is invalidated, callers can detect stale docs by comparing the stored `boundToReceipt` against the current tree hash.
 - AI-generated text (alt text proposals, annotation copy) is `status: 'draft'` until `approved: true` is set in the requirement. Only approved requirements emit `status: 'approved'` entries.
-- All contracts (`RequirementBundle`, `Requirement`, `ContentAssertion`, `FlowAssertion`, `DocAssertion`, `DocArtifact`, `Result`, `Receipt`, `ScreenScan`, `TranscriptStop`, `Finding`, `Draft`, `Deps`, `UsablConfig`, `Provider`, `ProviderContext`) are imported from `src/contracts/index.ts` — frozen in Phase 1 (`01-core-foundation.md` Task 2) and Phase 2 (Provider/ProviderContext/StepRunner seams in `00-plan-set.md`).
+- All contracts (`RequirementBundle`, `Requirement`, `ContentAssertion`, `FlowAssertion`, `DocAssertion`, `DocArtifact`, `Result`, `Receipt`, `ScreenScan`, `TranscriptStop`, `Finding`, `Draft`, `Deps`, `UsablConfig`, `Provider`, `ProviderContext`) are imported from `src/contracts/index.ts`: frozen in Phase 1 (`01-core-foundation.md` Task 2) and Phase 2 (Provider/ProviderContext/StepRunner seams in `00-plan-set.md`).
 
-**Tech Stack:** TypeScript (ESM, strict), Node 22, Vitest (unit tests), Zod (schema validation), `js-yaml` `^4` (YAML parse; pin the major version because `load` is safe-by-default only in v4 — in v3 it constructs arbitrary types), tsup (build). No Playwright in unit tests; all tests use in-memory fakes from `src/deps/fakes.ts`.
+**Tech Stack:** TypeScript (ESM, strict), Node 22, Vitest (unit tests), Zod pinned to
+`^3.23` (the code uses v3 APIs: `discriminatedUnion`, `.passthrough()`; zod v4 changed
+them, so an unpinned install fails), `js-yaml` `^4` (YAML parse; pin the major version
+because `load` is safe-by-default only in v4; v3 constructs arbitrary types), tsup
+(build). No Playwright in unit tests; all tests use in-memory fakes from
+`src/deps/fakes.ts` (`makeFakePage`, never hand-rolled `Page` literals).
+
+**Clock discipline:** no `new Date()` anywhere in this phase. `DocArtifact.generatedAt`
+is `receipt.mintedAt` when a receipt exists and the empty string otherwise; an artifact
+without a receipt has no honest time source and does not invent one.
+
+**Wiring:** Task 8 connects intake to the engine. The requirements directory is already
+force-guarded by Phase 3's `buildGuardedSet` (it includes `config.requirements`
+unconditionally), so a requirement edit is an `approval_required` event without any
+work here.
 
 **Phase dependencies:** Phases 1, 2, and 3 must be complete. Phase 6 reads `Result`, `Receipt`, `Finding`, `ScreenScan`, `TranscriptStop`, `Draft`, `Provider`, `ProviderContext` from already-frozen contracts; it introduces no new contract surface.
 
@@ -22,7 +36,7 @@
 
 **Files:**
 - `src/intake/schema.ts`
-- `tests/intake/schema.test.ts`
+- `test/intake/schema.test.ts`
 
 The `RequirementBundle` type is already frozen in `01-core-foundation.md` Task 2 (lines 387–402). This task adds the Zod runtime schema and the `parseBundle` guard function.
 
@@ -31,7 +45,7 @@ The `RequirementBundle` type is already frozen in `01-core-foundation.md` Task 2
 - [ ] **1. Write failing test**
 
 ```ts
-// tests/intake/schema.test.ts
+// test/intake/schema.test.ts
 import { describe, it, expect } from 'vitest';
 import { parseBundle } from '../../src/intake/schema.js';
 
@@ -84,10 +98,10 @@ describe('parseBundle', () => {
 });
 ```
 
-- [ ] **2. Run — expect FAIL** (`src/intake/schema.ts` does not exist)
+- [ ] **2. Run: expect FAIL** (`src/intake/schema.ts` does not exist)
 
 ```sh
-npx vitest run tests/intake/schema.test.ts
+npx vitest run test/intake/schema.test.ts
 ```
 
 - [ ] **3. Implement `src/intake/schema.ts`**
@@ -152,26 +166,26 @@ export function parseBundle(raw: unknown): ParseResult {
 }
 ```
 
-- [ ] **4. Run — expect PASS**
+- [ ] **4. Run: expect PASS**
 
 ```sh
-npx vitest run tests/intake/schema.test.ts
+npx vitest run test/intake/schema.test.ts
 ```
 
 - [ ] **5. Commit**
 
 ```sh
-git add src/intake/schema.ts tests/intake/schema.test.ts
+git add src/intake/schema.ts test/intake/schema.test.ts
 git commit -m "feat(intake): RequirementBundle Zod schema with approval_required guard"
 ```
 
 ---
 
-## Task 2: Normalize — YAML input shape
+## Task 2: Normalize: YAML input shape
 
 **Files:**
 - `src/intake/normalize.ts`
-- `tests/intake/normalize.test.ts`
+- `test/intake/normalize.test.ts`
 
 Primary shape for the contest is hand-authored YAML in the repo. The normalizer is the single entry point for all input shapes; callers never call `parseBundle` directly.
 
@@ -180,7 +194,7 @@ Primary shape for the contest is hand-authored YAML in the repo. The normalizer 
 - [ ] **1. Write failing test**
 
 ```ts
-// tests/intake/normalize.test.ts
+// test/intake/normalize.test.ts
 import { describe, it, expect } from 'vitest';
 import { normalize } from '../../src/intake/normalize.js';
 
@@ -225,10 +239,10 @@ requirements:
 });
 ```
 
-- [ ] **2. Run — expect FAIL**
+- [ ] **2. Run: expect FAIL**
 
 ```sh
-npx vitest run tests/intake/normalize.test.ts
+npx vitest run test/intake/normalize.test.ts
 ```
 
 - [ ] **3. Implement `src/intake/normalize.ts`**
@@ -255,16 +269,16 @@ export function normalize(raw: string, format: InputFormat = 'yaml'): ParseResul
 }
 ```
 
-- [ ] **4. Run — expect PASS**
+- [ ] **4. Run: expect PASS**
 
 ```sh
-npx vitest run tests/intake/normalize.test.ts
+npx vitest run test/intake/normalize.test.ts
 ```
 
 - [ ] **5. Commit**
 
 ```sh
-git add src/intake/normalize.ts tests/intake/normalize.test.ts
+git add src/intake/normalize.ts test/intake/normalize.test.ts
 git commit -m "feat(intake): normalize() converts YAML to RequirementBundle with guard"
 ```
 
@@ -274,9 +288,9 @@ git commit -m "feat(intake): normalize() converts YAML to RequirementBundle with
 
 **Files:**
 - `src/intake/map-to-providers.ts`
-- `tests/intake/map-to-providers.test.ts`
+- `test/intake/map-to-providers.test.ts`
 
-`content` requirements become deterministic content-matcher providers (reuse the `Provider` seam from Phase 2, `00-plan-set.md`). `flow` requirements become declarative walk probes. `doc` requirements feed the output module only — no runtime provider is emitted.
+`content` requirements become deterministic content-matcher providers (reuse the `Provider` seam from Phase 2, `00-plan-set.md`). `flow` requirements become declarative walk probes. `doc` requirements feed the output module only: no runtime provider is emitted.
 
 All intake-derived Drafts carry `evidenceClass: 'deterministic'` per ground-truth §13.
 
@@ -285,29 +299,20 @@ All intake-derived Drafts carry `evidenceClass: 'deterministic'` per ground-trut
 - [ ] **1. Write failing test**
 
 ```ts
-// tests/intake/map-to-providers.test.ts
+// test/intake/map-to-providers.test.ts
 import { describe, it, expect } from 'vitest';
 import { mapRequirementsToProviders } from '../../src/intake/map-to-providers.js';
 import type { RequirementBundle, UsablConfig, ProviderContext, Page } from '../../src/contracts/index.js';
 
-const fakePage: Page = {
-  gotoReady: async () => {},
-  focusBody: async () => {},
-  tab: async () => {},
-  press: async () => {},
+import { makeFakePage } from '../../src/deps/fakes.js';
+
+const fakePage: Page = makeFakePage({
   activeNode: async () => ({ name: 'Wrong label', role: 'img', states: {} }),
   activePath: async () => 'img.topology-svg',
   axAt: async (sel) => sel === 'img.topology-svg'
     ? { name: 'Wrong label', role: 'img', states: {} }
     : null,
-  queryAll: async () => [],
-  close: async () => {},
-  setViewport: async () => {},
-  setZoom: async () => {},
-  setReducedMotion: async () => {},
-  getComputedStyle: async () => '',
-  screenshot: async () => Buffer.from(''),
-};
+});
 
 const fakeConfig: UsablConfig = {
   appBaseUrl: 'http://localhost:3000',
@@ -403,10 +408,10 @@ describe('mapRequirementsToProviders', () => {
 });
 ```
 
-- [ ] **2. Run — expect FAIL**
+- [ ] **2. Run: expect FAIL**
 
 ```sh
-npx vitest run tests/intake/map-to-providers.test.ts
+npx vitest run test/intake/map-to-providers.test.ts
 ```
 
 - [ ] **3. Implement `src/intake/map-to-providers.ts`**
@@ -481,16 +486,24 @@ function makeFlowProvider(req: Requirement, assertion: FlowAssertion): Provider 
     capabilities: ['live'],
     async run(ctx: ProviderContext): Promise<Draft[]> {
       if (ctx.screen.id !== req.surface) return [];
+      await ctx.page.armAnnouncementCapture();
       for (const step of assertion.steps) {
         if (step.do === 'tab') await ctx.page.tab();
-        else if (step.do === 'press' && typeof step['key'] === 'string') {
+        else if (step.do === 'activate') await ctx.page.press('Enter');
+        else if (step.do === 'click' && typeof step['selector'] === 'string') {
+          await ctx.page.click(step['selector'] as string);
+        } else if (step.do === 'press' && typeof step['key'] === 'string') {
           await ctx.page.press(step['key'] as string);
         }
       }
       if (assertion.expectedAnnouncement !== undefined) {
+        // The expected text can arrive on the focused node OR through a live region
+        // (a toast is never on the focused node). Both count; silence fails.
         const node = await ctx.page.activeNode();
-        const actual = node?.name ?? '';
-        if (!actual.includes(assertion.expectedAnnouncement)) {
+        const focusText = node?.name ?? '';
+        const liveTexts = await ctx.page.drainAnnouncements();
+        const heard = [focusText, ...liveTexts].some((t) => t.includes(assertion.expectedAnnouncement!));
+        if (!heard) {
           return [{
             rule: `intake:${req.id}`,
             layer: 'intake-flow',
@@ -498,12 +511,12 @@ function makeFlowProvider(req: Requirement, assertion: FlowAssertion): Provider 
             evidenceClass: 'deterministic',
             screenId: req.surface,
             elementPath: await ctx.page.activePath(),
-            elementName: actual || null,
+            elementName: focusText || null,
             role: node?.role ?? null,
-            whatUserExperiences: `Screen reader does not announce "${assertion.expectedAnnouncement}" at this step`,
-            why: `Flow requirement ${req.id} expects the announcement to include "${assertion.expectedAnnouncement}"`,
-            fix: 'Add a live region or aria-label so the required text is announced at focus time',
-            evidence: { name: { value: actual || null, source: 'ax-tree', fromTree: true } },
+            whatUserExperiences: `Screen reader does not announce "${assertion.expectedAnnouncement}" after this flow`,
+            why: `Flow requirement ${req.id} expects the announcement to include "${assertion.expectedAnnouncement}"; neither the focused element nor any live region carried it`,
+            fix: 'Render the text into a live region that exists before the update, or onto the focused element',
+            evidence: { name: { value: focusText || null, source: 'ax-tree', fromTree: true } },
             confidence: 'fail',
           }];
         }
@@ -521,22 +534,22 @@ export function mapRequirementsToProviders(bundle: RequirementBundle): Provider[
     } else if (req.assertion.type === 'flow') {
       providers.push(makeFlowProvider(req, req.assertion));
     }
-    // 'doc' assertions feed the output module, not runtime checks — no provider emitted
+    // 'doc' assertions feed the output module, not runtime checks: no provider emitted
   }
   return providers;
 }
 ```
 
-- [ ] **4. Run — expect PASS**
+- [ ] **4. Run: expect PASS**
 
 ```sh
-npx vitest run tests/intake/map-to-providers.test.ts
+npx vitest run test/intake/map-to-providers.test.ts
 ```
 
 - [ ] **5. Commit**
 
 ```sh
-git add src/intake/map-to-providers.ts tests/intake/map-to-providers.test.ts
+git add src/intake/map-to-providers.ts test/intake/map-to-providers.test.ts
 git commit -m "feat(intake): map requirements to deterministic Providers; doc reqs emit no provider"
 ```
 
@@ -546,7 +559,7 @@ git commit -m "feat(intake): map requirements to deterministic Providers; doc re
 
 **Files:**
 - `src/docs/alt-text-manifest.ts`
-- `tests/docs/alt-text-manifest.test.ts`
+- `test/docs/alt-text-manifest.test.ts`
 
 Pure function of `Result + Receipt + RequirementBundle + surface -> DocArtifact`. Entries are derived from `content` requirements whose selector implies an image or labelled element. `approved: true` in the requirement → `status: 'approved'` in the entry. Receipt backing gives `boundToReceipt` and per-entry `evidenceRef`.
 
@@ -555,7 +568,7 @@ Pure function of `Result + Receipt + RequirementBundle + surface -> DocArtifact`
 - [ ] **1. Write failing test**
 
 ```ts
-// tests/docs/alt-text-manifest.test.ts
+// test/docs/alt-text-manifest.test.ts
 import { describe, it, expect } from 'vitest';
 import { generateAltTextManifest } from '../../src/docs/alt-text-manifest.js';
 import type { Result, Receipt, RequirementBundle, Coverage } from '../../src/contracts/index.js';
@@ -630,6 +643,14 @@ describe('generateAltTextManifest', () => {
     const artifact = generateAltTextManifest(baseResult, null, singleContentBundle, 'clusters');
     expect(artifact.boundToReceipt).toBeUndefined();
     expect(artifact.entries[0].evidenceRef).toBeUndefined();
+    expect(artifact.generatedAt).toBe(''); // no receipt, no honest time source
+  });
+
+  it('omits evidenceRef when the receipt did NOT cover this surface (never fabricated)', () => {
+    const uncovered = { ...baseReceipt, coverage: { checked: ['hosts'], notCovered: ['clusters'] } };
+    const artifact = generateAltTextManifest(baseResult, uncovered, singleContentBundle, 'clusters');
+    expect(artifact.entries[0].evidenceRef).toBeUndefined();
+    expect(artifact.boundToReceipt).toBe('abc123treehash'); // binding still recorded; evidence is not claimed
   });
 
   it('skips requirements for other surfaces', () => {
@@ -655,10 +676,10 @@ describe('generateAltTextManifest', () => {
 });
 ```
 
-- [ ] **2. Run — expect FAIL**
+- [ ] **2. Run: expect FAIL**
 
 ```sh
-npx vitest run tests/docs/alt-text-manifest.test.ts
+npx vitest run test/docs/alt-text-manifest.test.ts
 ```
 
 - [ ] **3. Implement `src/docs/alt-text-manifest.ts`**
@@ -694,11 +715,14 @@ export function generateAltTextManifest(
       f => f.screenId === surface && f.rule === `intake:${req.id}` && f.elementPath === selector,
     );
 
+    // HONESTY RULE: an evidenceRef exists only when the receipt covers this surface.
+    // A requirement on a surface the run never checked gets NO ref, never a fabricated one.
+    const covered = receipt !== null && receipt.coverage.checked.includes(surface);
     let evidenceRef: string | undefined;
-    if (receipt !== null) {
+    if (covered) {
       evidenceRef = backing
         ? findingEvidenceRef(backing)
-        : receiptEvidenceRef(receipt.sourceTree, surface, selector);
+        : receiptEvidenceRef(receipt!.sourceTree, surface, selector);
     }
 
     return {
@@ -713,22 +737,23 @@ export function generateAltTextManifest(
     kind: 'alt-text-manifest',
     surface,
     entries,
-    generatedAt: receipt?.mintedAt ?? new Date().toISOString(),
+    // No receipt means no honest time source; the empty string says so.
+    generatedAt: receipt?.mintedAt ?? '',
     boundToReceipt: receipt?.sourceTree,
   };
 }
 ```
 
-- [ ] **4. Run — expect PASS**
+- [ ] **4. Run: expect PASS**
 
 ```sh
-npx vitest run tests/docs/alt-text-manifest.test.ts
+npx vitest run test/docs/alt-text-manifest.test.ts
 ```
 
 - [ ] **5. Commit**
 
 ```sh
-git add src/docs/alt-text-manifest.ts tests/docs/alt-text-manifest.test.ts
+git add src/docs/alt-text-manifest.ts test/docs/alt-text-manifest.test.ts
 git commit -m "feat(docs): generateAltTextManifest() bound to receipt evidenceRef"
 ```
 
@@ -738,16 +763,16 @@ git commit -m "feat(docs): generateAltTextManifest() bound to receipt evidenceRe
 
 **Files:**
 - `src/docs/announcement-snippets.ts`
-- `tests/docs/announcement-snippets.test.ts`
+- `test/docs/announcement-snippets.test.ts`
 
-Pure function of `Result + Receipt -> DocArtifact[]`. One artifact per surface. Each entry represents one `TranscriptStop` — what a screen reader would announce at that interactive stop. Entries are always `status: 'draft'` (AI-generated; must be approved in the requirement bundle before publishing). `evidenceRef` encodes the stop index so callers can trace back to the exact transcript.
+Pure function of `Result + Receipt -> DocArtifact[]`. One artifact per surface. Each entry represents one `TranscriptStop`: what a screen reader would announce at that interactive stop. Entries are always `status: 'draft'` (AI-generated; must be approved in the requirement bundle before publishing). `evidenceRef` encodes the stop index so callers can trace back to the exact transcript.
 
 ### Steps
 
 - [ ] **1. Write failing test**
 
 ```ts
-// tests/docs/announcement-snippets.test.ts
+// test/docs/announcement-snippets.test.ts
 import { describe, it, expect } from 'vitest';
 import { generateAnnouncementSnippets } from '../../src/docs/announcement-snippets.js';
 import type { Result, Receipt, Coverage, ScreenScan } from '../../src/contracts/index.js';
@@ -793,6 +818,7 @@ const scanWithStops: ScreenScan = {
     },
   ],
   drafts: [],
+  gaps: [],
 };
 
 function makeResult(screens: ScreenScan[]): Result {
@@ -835,17 +861,17 @@ describe('generateAnnouncementSnippets', () => {
   });
 
   it('produces an empty entries array when a surface has no stops', () => {
-    const emptyScan: ScreenScan = { screenId: 'hosts', url: 'http://x/hosts', stops: [], drafts: [] };
+    const emptyScan: ScreenScan = { screenId: 'hosts', url: 'http://x/hosts', stops: [], drafts: [], gaps: [] };
     const artifacts = generateAnnouncementSnippets(makeResult([emptyScan]), baseReceipt);
     expect(artifacts[0].entries).toHaveLength(0);
   });
 });
 ```
 
-- [ ] **2. Run — expect FAIL**
+- [ ] **2. Run: expect FAIL**
 
 ```sh
-npx vitest run tests/docs/announcement-snippets.test.ts
+npx vitest run test/docs/announcement-snippets.test.ts
 ```
 
 - [ ] **3. Implement `src/docs/announcement-snippets.ts`**
@@ -861,8 +887,9 @@ export function generateAnnouncementSnippets(result: Result, receipt: Receipt | 
         .filter(t => t.length > 0)
         .join(', ');
 
-      const evidenceRef = receipt
-        ? `stop:${receipt.sourceTree}:${scan.screenId}:${stop.index}`
+      const covered = receipt !== null && receipt.coverage.checked.includes(scan.screenId);
+      const evidenceRef = covered
+        ? `stop:${receipt!.sourceTree}:${scan.screenId}:${stop.index}`
         : undefined;
 
       return {
@@ -877,23 +904,23 @@ export function generateAnnouncementSnippets(result: Result, receipt: Receipt | 
       kind: 'announcement-snippets' as const,
       surface: scan.screenId,
       entries,
-      generatedAt: receipt?.mintedAt ?? new Date().toISOString(),
+      generatedAt: receipt?.mintedAt ?? '',
       boundToReceipt: receipt?.sourceTree,
     };
   });
 }
 ```
 
-- [ ] **4. Run — expect PASS**
+- [ ] **4. Run: expect PASS**
 
 ```sh
-npx vitest run tests/docs/announcement-snippets.test.ts
+npx vitest run test/docs/announcement-snippets.test.ts
 ```
 
 - [ ] **5. Commit**
 
 ```sh
-git add src/docs/announcement-snippets.ts tests/docs/announcement-snippets.test.ts
+git add src/docs/announcement-snippets.ts test/docs/announcement-snippets.test.ts
 git commit -m "feat(docs): generateAnnouncementSnippets() bound to stop evidenceRef"
 ```
 
@@ -903,16 +930,16 @@ git commit -m "feat(docs): generateAnnouncementSnippets() bound to stop evidence
 
 **Files:**
 - `src/docs/keyboard-paths.ts`
-- `tests/docs/keyboard-paths.test.ts`
+- `test/docs/keyboard-paths.test.ts`
 
-Pure function of `Result + Receipt -> DocArtifact[]`. One artifact per surface. Each entry is a Tab-order step showing the element path (prefixed with its 1-based ordinal), the full announcement, and a stable `evidenceRef`. Status is always `'draft'` — the path is a generated snapshot, not an authored contract.
+Pure function of `Result + Receipt -> DocArtifact[]`. One artifact per surface. Each entry is a Tab-order step showing the element path (prefixed with its 1-based ordinal), the full announcement, and a stable `evidenceRef`. Status is always `'draft'`: the path is a generated snapshot, not an authored contract.
 
 ### Steps
 
 - [ ] **1. Write failing test**
 
 ```ts
-// tests/docs/keyboard-paths.test.ts
+// test/docs/keyboard-paths.test.ts
 import { describe, it, expect } from 'vitest';
 import { generateKeyboardPaths } from '../../src/docs/keyboard-paths.js';
 import type { Result, Receipt, Coverage, ScreenScan } from '../../src/contracts/index.js';
@@ -951,6 +978,7 @@ const scan: ScreenScan = {
     },
   ],
   drafts: [],
+  gaps: [],
 };
 
 function makeResult(screens: ScreenScan[]): Result {
@@ -1000,10 +1028,10 @@ describe('generateKeyboardPaths', () => {
 });
 ```
 
-- [ ] **2. Run — expect FAIL**
+- [ ] **2. Run: expect FAIL**
 
 ```sh
-npx vitest run tests/docs/keyboard-paths.test.ts
+npx vitest run test/docs/keyboard-paths.test.ts
 ```
 
 - [ ] **3. Implement `src/docs/keyboard-paths.ts`**
@@ -1018,8 +1046,9 @@ export function generateKeyboardPaths(result: Result, receipt: Receipt | null): 
         .map(t => `${t.kind}:${t.text ?? 'null'}`)
         .join(' | ');
 
-      const evidenceRef = receipt
-        ? `stop:${receipt.sourceTree}:${scan.screenId}:${stop.index}`
+      const covered = receipt !== null && receipt.coverage.checked.includes(scan.screenId);
+      const evidenceRef = covered
+        ? `stop:${receipt!.sourceTree}:${scan.screenId}:${stop.index}`
         : undefined;
 
       return {
@@ -1034,32 +1063,32 @@ export function generateKeyboardPaths(result: Result, receipt: Receipt | null): 
       kind: 'keyboard-paths' as const,
       surface: scan.screenId,
       entries,
-      generatedAt: receipt?.mintedAt ?? new Date().toISOString(),
+      generatedAt: receipt?.mintedAt ?? '',
       boundToReceipt: receipt?.sourceTree,
     };
   });
 }
 ```
 
-- [ ] **4. Run — expect PASS**
+- [ ] **4. Run: expect PASS**
 
 ```sh
-npx vitest run tests/docs/keyboard-paths.test.ts
+npx vitest run test/docs/keyboard-paths.test.ts
 ```
 
 - [ ] **5. Commit**
 
 ```sh
-git add src/docs/keyboard-paths.ts tests/docs/keyboard-paths.test.ts
+git add src/docs/keyboard-paths.ts test/docs/keyboard-paths.test.ts
 git commit -m "feat(docs): generateKeyboardPaths() with Tab-order entries and stop evidenceRef"
 ```
 
 ---
 
-## Task 7: Integration — exit criterion verification
+## Task 7: Integration: exit criterion verification
 
 **Files:**
-- `tests/intake/integration.test.ts`
+- `test/intake/integration.test.ts`
 
 Exercises the three exit criterion invariants end-to-end using in-memory fakes: (1) an authored requirement maps to a check; (2) a generated artifact carries an `evidenceRef` that resolves to real receipt evidence; (3) malformed intake yields `approval_required`.
 
@@ -1068,13 +1097,14 @@ Exercises the three exit criterion invariants end-to-end using in-memory fakes: 
 - [ ] **1. Write failing test**
 
 ```ts
-// tests/intake/integration.test.ts
+// test/intake/integration.test.ts
 import { describe, it, expect } from 'vitest';
 import { normalize } from '../../src/intake/normalize.js';
 import { mapRequirementsToProviders } from '../../src/intake/map-to-providers.js';
 import { generateAltTextManifest } from '../../src/docs/alt-text-manifest.js';
 import { generateAnnouncementSnippets } from '../../src/docs/announcement-snippets.js';
 import { generateKeyboardPaths } from '../../src/docs/keyboard-paths.js';
+import { makeFakePage } from '../../src/deps/fakes.js';
 import type { Result, Receipt, Coverage, ScreenScan, UsablConfig, ProviderContext, Page } from '../../src/contracts/index.js';
 
 const baseCoverage: Coverage = {
@@ -1110,6 +1140,7 @@ const scanWithStops: ScreenScan = {
     },
   ],
   drafts: [],
+  gaps: [],
 };
 
 const result: Result = {
@@ -1183,7 +1214,7 @@ requirements:
     expect(paths[0].entries[0].evidenceRef).toBe('stop:integration-tree-abc:clusters:0');
   });
 
-  it('malformed intake YAML yields approval_required — never a silent pass or default', () => {
+  it('malformed intake YAML yields approval_required: never a silent pass or default', () => {
     const r1 = normalize('not: yaml: at: all: [unclosed', 'yaml');
     expect(r1.ok).toBe(false);
     if (!r1.ok) expect(r1.verdict).toBe('approval_required');
@@ -1227,22 +1258,10 @@ requirements:
     if (!bundle.ok) return;
 
     const providers = mapRequirementsToProviders(bundle.bundle);
-    const fakePage: Page = {
-      gotoReady: async () => {},
-      focusBody: async () => {},
-      tab: async () => {},
-      press: async () => {},
-      activeNode: async () => null,
+    const fakePage: Page = makeFakePage({
       activePath: async () => 'img.topology-svg',
       axAt: async () => ({ name: 'Wrong text entirely', role: 'img', states: {} }),
-      queryAll: async () => [],
-      close: async () => {},
-      setViewport: async () => {},
-      setZoom: async () => {},
-      setReducedMotion: async () => {},
-      getComputedStyle: async () => '',
-      screenshot: async () => Buffer.from(''),
-    };
+    });
     const fakeConfig: UsablConfig = {
       appBaseUrl: 'http://localhost:3000',
       uiFileGlobs: [],
@@ -1263,10 +1282,10 @@ requirements:
 });
 ```
 
-- [ ] **2. Run — expect FAIL** (modules exist but integration wiring is being tested end-to-end)
+- [ ] **2. Run: expect FAIL** (modules exist but integration wiring is being tested end-to-end)
 
 ```sh
-npx vitest run tests/intake/integration.test.ts
+npx vitest run test/intake/integration.test.ts
 ```
 
 - [ ] **3. Fix any integration gaps** (typically none if Tasks 1–6 passed)
@@ -1274,21 +1293,121 @@ npx vitest run tests/intake/integration.test.ts
 Run the full suite to confirm nothing regressed:
 
 ```sh
-npx vitest run tests/intake/ tests/docs/
+npx vitest run test/intake/ test/docs/
 ```
 
-- [ ] **4. Run integration test — expect PASS**
+- [ ] **4. Run integration test: expect PASS**
 
 ```sh
-npx vitest run tests/intake/integration.test.ts
+npx vitest run test/intake/integration.test.ts
 ```
 
 - [ ] **5. Commit**
 
 ```sh
-git add tests/intake/integration.test.ts
-git commit -m "test(intake): integration — requirement maps to check, artifact carries evidenceRef, malformed yields approval_required"
+git add test/intake/integration.test.ts
+git commit -m "test(intake): integration: requirement maps to check, artifact carries evidenceRef, malformed yields approval_required"
 ```
+
+---
+
+## Task 8: Wire intake into the engine
+
+**Files:**
+- Create: `src/intake/load.ts`
+- Modify: the CLI's `buildDeps` wiring (provider list construction)
+- Test: `test/intake/load.test.ts`
+
+Without this task the intake is a library nothing calls. With it:
+
+1. `loadRequirements(fs, config)`: when `config.requirements` is set, glob
+   `<dir>/**/*.yaml` + `<dir>/**/*.yml` through `deps.fs`, `normalize()` each file, and
+   merge the bundles. ANY file that fails to parse returns
+   `{ ok: false, verdict: 'approval_required', reason }` for the whole load: a broken
+   requirement file is a policy problem, never a skipped file.
+2. The CLI's CheckRunner construction appends `mapRequirementsToProviders(bundle)` to
+   the provider list (after axe/rulepack/walk, before the voicing provider). Intake
+   providers are surface-scoped by their own `run()` guards.
+3. A failed load surfaces as `approval_required` through the normal gate path: the
+   caller converts `{ ok: false }` into a guard-diverged-style blocked Result before
+   any browser work (same treatment as a diverged policy file).
+4. The requirements directory is already in the guarded set (Phase 3
+   `buildGuardedSet` includes `config.requirements` unconditionally), so editing a
+   requirement without committing it blocks as `approval_required`. No extra work,
+   but Step 1's test asserts it end to end.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// test/intake/load.test.ts
+import { describe, it, expect } from 'vitest';
+import { loadRequirements } from '../../src/intake/load.js';
+import { buildGuardedSet } from '../../src/trust/guard.js';
+import { makeFakeDeps } from '../../src/deps/fakes.js';
+import type { UsablConfig } from '../../src/contracts/index.js';
+
+const config: UsablConfig = {
+  appBaseUrl: 'http://localhost:3000', uiFileGlobs: [],
+  discovery: { routerFile: '', wideBlastGlobs: [] }, surfaces: [],
+  guardedPaths: [], requirements: 'requirements/',
+};
+
+const goodYaml = `
+version: 1
+requirements:
+  - id: req-01
+    kind: content
+    surface: clusters
+    description: Topology alt text
+    approved: true
+    assertion:
+      type: content
+      selector: img.topology-svg
+      expectedText: "Cluster network topology"
+`;
+
+describe('loadRequirements', () => {
+  it('globs the requirements dir and merges bundles', async () => {
+    const deps = makeFakeDeps({ files: { 'requirements/clusters.yaml': goodYaml } });
+    const r = await loadRequirements(deps.fs, config);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.bundle.requirements).toHaveLength(1);
+  });
+
+  it('returns ok with an empty bundle when no requirements dir is configured', async () => {
+    const deps = makeFakeDeps({});
+    const r = await loadRequirements(deps.fs, { ...config, requirements: undefined });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.bundle.requirements).toHaveLength(0);
+  });
+
+  it('ANY malformed file fails the whole load with approval_required', async () => {
+    const deps = makeFakeDeps({ files: {
+      'requirements/good.yaml': goodYaml,
+      'requirements/bad.yaml': 'version: 1\nrequirements:\n  - id: only-id',
+    } });
+    const r = await loadRequirements(deps.fs, config);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.verdict).toBe('approval_required');
+      expect(r.reason).toContain('bad.yaml');
+    }
+  });
+
+  it('the requirements dir sits in the guarded set without any extra wiring', () => {
+    expect(buildGuardedSet(config)).toContain('requirements/');
+  });
+});
+```
+
+- [ ] **Step 2: Run: expect FAIL. Step 3: Implement `src/intake/load.ts`** (glob,
+  read, `normalize` each, merge `requirements` arrays, first failure wins with the
+  file path prefixed to the reason). Then extend the CLI wiring to append
+  `mapRequirementsToProviders(bundle)` to the provider list and to convert a failed
+  load into the blocked `approval_required` Result before any scan.
+
+- [ ] **Step 4: Run: expect PASS**, then the full suite.
+- [ ] **Step 5: Commit** `feat(intake): load requirement bundles from the guarded dir and wire providers into the engine`
 
 ---
 
@@ -1297,24 +1416,28 @@ git commit -m "test(intake): integration — requirement maps to check, artifact
 Before closing this phase, verify:
 
 **Intake normalize/schema/guard**
-- [ ] `parseBundle` rejects every invalid shape with `verdict: 'approval_required'` — no silent defaults, no partial results.
-- [ ] `normalize()` handles YAML parse errors (try/catch), schema failures (Zod), and kind/assertion.type mismatches (superRefine) — all three resolve to `approval_required`.
+- [ ] `parseBundle` rejects every invalid shape with `verdict: 'approval_required'`: no silent defaults, no partial results.
+- [ ] `normalize()` handles YAML parse errors (try/catch), schema failures (Zod), and kind/assertion.type mismatches (superRefine): all three resolve to `approval_required`.
 - [ ] `mapRequirementsToProviders` emits no provider for `doc` requirements; only `content` and `flow` produce runtime checks.
 - [ ] All intake-derived Drafts carry `evidenceClass: 'deterministic'` per ground-truth §13.
 
 **Docs artifacts and evidenceRef binding**
-- [ ] All three generators (`generateAltTextManifest`, `generateAnnouncementSnippets`, `generateKeyboardPaths`) are pure functions; no I/O, no side effects.
-- [ ] Every entry with receipt backing has a non-undefined `evidenceRef` whose format is deterministic and contains the `sourceTree` hash.
+- [ ] All three generators (`generateAltTextManifest`, `generateAnnouncementSnippets`, `generateKeyboardPaths`) are pure functions; no I/O, no side effects, no `new Date()` (`generatedAt` is `receipt.mintedAt` or the empty string).
+- [ ] `evidenceRef` is emitted ONLY when the receipt exists AND `receipt.coverage.checked` includes the surface. A surface the run never checked gets no ref. Never fabricated.
 - [ ] No entry is emitted with `status: 'approved'` unless `requirement.approved === true`.
 - [ ] `boundToReceipt` is `undefined` (not `null`, not `''`) when `receipt` is `null`.
+
+**Engine wiring (Task 8)**
+- [ ] `loadRequirements` merges every YAML bundle under `config.requirements`; one malformed file fails the whole load as `approval_required` with the file named in the reason.
+- [ ] Intake providers ride the same CheckRunner provider list; the requirements dir is in the guarded set via Phase 3's `buildGuardedSet`.
 - [ ] `schemaVersion` is carried via the `DocArtifact` type (enforced by TypeScript, not duplicated at runtime).
 
 **Placeholder / TBD scan**
-- [ ] Search `src/intake/ src/docs/` for `TODO`, `FIXME`, `any`, `as any`, `TBD` — address or document each occurrence.
+- [ ] Search `src/intake/ src/docs/` for `TODO`, `FIXME`, `any`, `as any`, `TBD`: address or document each occurrence.
 - [ ] Note: `as any` in `makeContentProvider`/`makeFlowProvider` casts are acceptable only if TypeScript's discriminated-union narrowing of `Requirement.assertion` cannot be widened further without changing the frozen contract.
 
 **Type consistency with frozen contracts**
 - [ ] `Draft` fields match the Phase 1 frozen interface exactly: `rule`, `layer`, `severity`, `evidenceClass`, `screenId`, `elementPath`, `elementName`, `role`, `whatUserExperiences`, `why`, `fix`, `evidence`, `confidence`.
-- [ ] `RequirementBundle`, `Requirement`, `DocArtifact` are imported from `src/contracts/index.ts` — not re-declared.
+- [ ] `RequirementBundle`, `Requirement`, `DocArtifact` are imported from `src/contracts/index.ts`: not re-declared.
 - [ ] `Provider`, `ProviderContext`, `Capability` are imported from `src/contracts/index.ts` (added by Phase 2 per the frozen seam in `00-plan-set.md`).
-- [ ] `Receipt.sourceTree` (the tree hash string) is the canonical key for `boundToReceipt` and `evidenceRef` — not a running ID, not a timestamp.
+- [ ] `Receipt.sourceTree` (the tree hash string) is the canonical key for `boundToReceipt` and `evidenceRef`: not a running ID, not a timestamp.

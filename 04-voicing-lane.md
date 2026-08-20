@@ -7,31 +7,34 @@
 **Architecture:**
 - `VirtualSrProvider` is a `Provider`. It returns `Draft[]`. It never decides a verdict.
 - The gate (Phase 1) is the sole verdict authority. `evidenceClass: 'preview'` findings are excluded from the gate verdict by definition; only `deterministic` (and items listed in `promotedObligations`) feed it.
-- `StepRunner` (frozen seam from `00-plan-set.md`) executes `Step[]` and returns `TranscriptStop[]`. The voicing provider reuses it — no reimplementation.
-- The COMPARATOR INVARIANT: normalize the authored `SpeechObligation.requiredTokens` token; compare against the RAW observed `AnnouncementToken` text. Never normalize the observed transcript.
-- `@guidepup/virtual-screen-reader` runs only in integration tests against a real DOM. Unit tests use a fake transcript injected via a `TranscriptReader` seam.
+- `StepRunner` (frozen seam from `00-plan-set.md`, built in Phase 2) executes `Step[]` and returns `TranscriptStop[]`. After every step it drains the live-region buffer into `kind: 'live'` tokens. Toast and status obligations match against live tokens; without them a "toast announced" obligation could never be satisfied.
+- The COMPARATOR INVARIANT: matching normalizes BOTH sides (case, punctuation, whitespace) so incidental punctuation or token boundaries in the observed transcript cannot fabricate a miss or mask a hit. Honesty lives in DISPLAY: findings always quote the raw observed text verbatim. The engine never doctors what it shows, only how it compares.
+- The structural tier checks are SCOPED to obligation windows plus contract-level facts (unreachable focus, over-long tab path). It does not blanket-require a name and role on every stop: focus legitimately lands on nameless targets (a main landmark after a route change, a tabindex="-1" skip target), and the keyboard walk already flags unnamed INTERACTIVE elements.
 
 **Tech Stack:**
 - TypeScript (ESM, strict), Node 22
-- Vitest for all tests (unit tests: fakes only; no DOM, no real browser)
-- `@guidepup/virtual-screen-reader` — integration-only; behind `TranscriptReader` seam
-- Frozen contracts from `src/contracts/index.ts` (Phase 1): `InteractionContract`, `SpeechObligation`, `Step`, `TranscriptStop`, `AnnouncementToken`, `Draft`, `Finding`, `Provider`, `ProviderContext`, `Capability`, `UsablConfig`, `Page`
+- Vitest for all tests (unit tests: fakes only via `makeFakePage`; no DOM, no real browser)
+- Frozen contracts from `src/contracts/index.ts` (Phase 1): `InteractionContract`, `SpeechObligation`, `Step`, `TranscriptStop`, `AnnouncementToken` (including `kind: 'live'`), `Draft`, `Finding`, `Provider`, `ProviderContext`, `Capability`, `UsablConfig`, `Page`
 - Frozen `StepRunner` seam from `00-plan-set.md`
+- Screen-reader division of labor: the AX-tree transcript plus live tokens are the
+  in-loop evidence; Orca-on-Fedora is the OFFLINE calibration harness that feeds
+  `promotedObligations`; NVDA is the demo voice. No screen-reader automation library
+  runs in the loop (Task 8).
 
 ---
 
-## Task 1 — Normalize helper for obligation tokens
+## Task 1: Normalize helper for obligation tokens
 
 **Why first:** every other task depends on the comparator invariant. Nail it in isolation with pure, trivially-testable code.
 
 **Files:**
 - `src/voicing/normalize.ts`
-- `tests/voicing/normalize.test.ts`
+- `test/voicing/normalize.test.ts`
 
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-// tests/voicing/normalize.test.ts
+// test/voicing/normalize.test.ts
 import { describe, it, expect } from 'vitest';
 import { normalizeToken } from '../../src/voicing/normalize.js';
 
@@ -54,7 +57,7 @@ describe('normalizeToken', () => {
 - [ ] **Step 2: Run and confirm FAIL**
 
 ```
-npx vitest run tests/voicing/normalize.test.ts
+npx vitest run test/voicing/normalize.test.ts
 ```
 
 Expected: `Cannot find module '../../src/voicing/normalize.js'`
@@ -65,42 +68,45 @@ Expected: `Cannot find module '../../src/voicing/normalize.js'`
 // src/voicing/normalize.ts
 
 /**
- * Normalize an authored obligation token for comparison.
- *
- * COMPARATOR INVARIANT: this function is called on the AUTHORED side only.
- * Raw observed AnnouncementToken.text is NEVER passed through here.
+ * Normalize a token for COMPARISON: lowercase, strip punctuation, collapse
+ * whitespace. Both the authored obligation tokens and the observed transcript pass
+ * through this for matching. Findings always DISPLAY the raw observed text
+ * verbatim; normalization never leaks into what the user sees.
  */
 export function normalizeToken(raw: string | null): string {
   if (raw === null) return '';
   return raw
     .toLowerCase()
-    .replace(/[^\w\s]/g, '')
+    .replace(/[^\w\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
 /**
- * Return true when every required token from the obligation is present
- * (as a substring) in at least one announcement in the stop's window.
- *
- * Normalization is applied to the OBLIGATION tokens.
- * The observed text is matched raw (lowercased for comparison only, never stripped).
+ * True when every required token appears in the normalized observed transcript.
+ * The transcript is the normalized announcement texts joined with single spaces,
+ * so a required phrase can span adjacent announcement tokens and punctuation
+ * inside the observed text cannot fabricate a miss.
  */
 export function obligationSatisfied(
   required: string[],
   announcements: Array<{ text: string | null }>,
 ): boolean {
-  const observedRaw = announcements
-    .map(a => (a.text ?? '').toLowerCase())
-    .join('\n');
-  return required.every(tok => observedRaw.includes(normalizeToken(tok)));
+  const haystack = announcements
+    .map(a => normalizeToken(a.text))
+    .filter(t => t !== '')
+    .join(' ');
+  return required.every(tok => {
+    const needle = normalizeToken(tok);
+    return needle === '' || haystack.includes(needle);
+  });
 }
 ```
 
 - [ ] **Step 4: Run and confirm PASS**
 
 ```
-npx vitest run tests/voicing/normalize.test.ts
+npx vitest run test/voicing/normalize.test.ts
 ```
 
 - [ ] **Step 5: Commit**
@@ -111,185 +117,203 @@ feat(voicing): add token normalizer with comparator invariant
 
 ---
 
-## Task 2 — `TranscriptReader` seam and fake
+## Task 2: Obligation matching matrix (punctuation, spanning, live tokens)
 
-**Why:** `@guidepup/virtual-screen-reader` is a real browser dependency. The seam makes every unit test run on pure fakes; the real wiring is a labeled integration task at the end.
+**Why:** the comparator is where a voicing lane quietly rots. These tests pin the
+matching semantics against the three real-world hazards: punctuation inside observed
+text, a required phrase spanning adjacent announcement tokens, and toast text that
+arrives only as a `kind: 'live'` token.
 
 **Files:**
-- `src/voicing/transcript-reader.ts`
-- `src/voicing/fakes.ts`
-- `tests/voicing/transcript-reader.test.ts`
+- `test/voicing/matching.test.ts`
 
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-// tests/voicing/transcript-reader.test.ts
+// test/voicing/matching.test.ts
 import { describe, it, expect } from 'vitest';
-import type { TranscriptStop } from '../../src/contracts/index.js';
-import { FakeTranscriptReader } from '../../src/voicing/fakes.js';
+import { obligationSatisfied } from '../../src/voicing/normalize.js';
+import type { AnnouncementToken } from '../../src/contracts/index.js';
 
-describe('FakeTranscriptReader', () => {
-  it('returns the pre-configured stops', async () => {
-    const stops: TranscriptStop[] = [
-      { index: 0, elementPath: 'button#save', announcement: [{ kind: 'name', text: 'Save', fromTree: true, source: 'ax-tree' }] },
-      { index: 1, elementPath: 'dialog', announcement: [{ kind: 'role', text: 'dialog', fromTree: true, source: 'ax-tree' }, { kind: 'name', text: 'Confirm deletion', fromTree: true, source: 'ax-tree' }] },
-    ];
-    const reader = new FakeTranscriptReader(stops);
-    const result = await reader.read();
-    expect(result).toStrictEqual(stops);
+const name = (text: string): AnnouncementToken => ({ kind: 'name', text, fromTree: true, source: 'ax-tree' });
+const live = (text: string): AnnouncementToken => ({ kind: 'live', text, fromTree: false, source: 'attribute' });
+
+describe('obligationSatisfied', () => {
+  it('punctuation in the observed text cannot fabricate a miss', () => {
+    expect(obligationSatisfied(['cluster deleted successfully'], [name('Cluster deleted, successfully.')])).toBe(true);
   });
 
-  it('returns empty array when no stops configured', async () => {
-    const reader = new FakeTranscriptReader([]);
-    expect(await reader.read()).toEqual([]);
+  it('a required phrase can span adjacent announcement tokens', () => {
+    expect(obligationSatisfied(['confirm deletion'], [name('Confirm'), name('deletion')])).toBe(true);
+  });
+
+  it('matches toast text that arrives only as a live token', () => {
+    expect(obligationSatisfied(['Cluster deleted'], [name('Delete'), live('Cluster deleted successfully')])).toBe(true);
+  });
+
+  it('a genuinely absent token still misses', () => {
+    expect(obligationSatisfied(['Cluster deleted'], [name('Loading')])).toBe(false);
+  });
+
+  it('every required token must be present, independently', () => {
+    expect(obligationSatisfied(['Cluster deleted', 'success'], [live('Cluster deleted')])).toBe(false);
+    expect(obligationSatisfied(['Cluster deleted', 'success'], [live('Cluster deleted'), live('Alert: success')])).toBe(true);
   });
 });
 ```
 
-- [ ] **Step 2: Run and confirm FAIL**
+- [ ] **Step 2: Run and confirm PASS or FAIL honestly** (these may already pass after
+  Task 1; if any fails, fix `normalize.ts`, never the test)
 
 ```
-npx vitest run tests/voicing/transcript-reader.test.ts
+npx vitest run test/voicing/matching.test.ts
 ```
 
-- [ ] **Step 3: Write the seam and fake**
-
-```ts
-// src/voicing/transcript-reader.ts
-import type { TranscriptStop } from '../contracts/index.js';
-
-/**
- * Seam between the voicing provider and @guidepup/virtual-screen-reader.
- * Unit tests use FakeTranscriptReader. Integration uses GuidepupTranscriptReader
- * (labeled integration task at end of this plan).
- */
-export interface TranscriptReader {
-  read(): Promise<TranscriptStop[]>;
-}
-```
-
-```ts
-// src/voicing/fakes.ts
-import type { TranscriptStop } from '../contracts/index.js';
-import type { TranscriptReader } from './transcript-reader.js';
-
-export class FakeTranscriptReader implements TranscriptReader {
-  constructor(private readonly stops: TranscriptStop[]) {}
-  async read(): Promise<TranscriptStop[]> {
-    return this.stops;
-  }
-}
-```
-
-- [ ] **Step 4: Run and confirm PASS**
+- [ ] **Step 3: Commit**
 
 ```
-npx vitest run tests/voicing/transcript-reader.test.ts
-```
-
-- [ ] **Step 5: Commit**
-
-```
-feat(voicing): add TranscriptReader seam and FakeTranscriptReader
+test(voicing): pin obligation matching semantics (punctuation, spanning, live tokens)
 ```
 
 ---
 
-## Task 3 — Structural tier (deterministic, gates)
+## Task 3: Structural tier (deterministic, gates)
 
-The structural tier reads `TranscriptStop[]` and the `InteractionContract` and emits `deterministic` `Draft[]` for reproducible structural failures: missing name, missing role, missing state, no live region, unreachable focus, over-long tab path. These gate.
+The structural tier reads `TranscriptStop[]` and the `InteractionContract` and emits
+`deterministic` `Draft[]` for reproducible structural failures. The checks are SCOPED:
+
+- **Obligation windows only** for name/role facts: at `ob.afterStep`, the focused
+  element must carry the expected `focusedRole` (when set) and an accessible name.
+  There is no blanket name/role requirement on every stop: focus legitimately lands on
+  nameless targets (main landmark after a route change, tabindex="-1" skip targets),
+  and the keyboard walk already flags unnamed INTERACTIVE elements.
+- **mustAnnounce means live region, checked via live tokens:** when
+  `ob.mustAnnounce` is true, the step window must contain at least one
+  `kind: 'live'` token. This is the structural "no live region" gate: the consequence
+  of the interaction (a toast, a status change) must actually reach assistive
+  technology. Which WORDS it contains is the voicing tier's business.
+- **Unreachable focus:** zero stops, or no stop recorded at an obligation's step.
+- **Over-long tab path:** more stops than `maxTabPath` allows.
+
+These gate.
 
 **Files:**
 - `src/voicing/structural-tier.ts`
-- `tests/voicing/structural-tier.test.ts`
+- `test/voicing/structural-tier.test.ts`
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-// tests/voicing/structural-tier.test.ts
+// test/voicing/structural-tier.test.ts
 import { describe, it, expect } from 'vitest';
-import type { TranscriptStop, InteractionContract, Draft } from '../../src/contracts/index.js';
+import type { TranscriptStop, InteractionContract, AnnouncementToken } from '../../src/contracts/index.js';
 import { runStructuralTier } from '../../src/voicing/structural-tier.js';
 
-const baseContract: InteractionContract = {
-  contractId: 'test-contract',
+const dialogContract: InteractionContract = {
+  contractId: 'dialog-contract',
   surfaceId: 'clusters-page',
   task: 'Open delete dialog',
-  steps: [
-    { do: 'tab' },
-    { do: 'activate' },
-  ],
+  steps: [{ do: 'tab' }, { do: 'activate' }],
   obligations: [
-    {
-      class: 'dialog-name',
-      afterStep: 1,
-      requiredTokens: ['Confirm deletion'],
-      focusedRole: 'dialog',
-      mustAnnounce: true,
-    },
+    { class: 'dialog-name', afterStep: 1, requiredTokens: ['Confirm deletion'], focusedRole: 'dialog', mustAnnounce: false },
   ],
   maxTabPath: 5,
 };
 
-function stop(index: number, elementPath: string, tokens: Array<{ kind: 'name' | 'role' | 'state'; text: string | null }>): TranscriptStop {
+const toastContract: InteractionContract = {
+  contractId: 'toast-contract',
+  surfaceId: 'clusters-page',
+  task: 'Delete cluster and observe toast',
+  steps: [{ do: 'tab' }, { do: 'activate' }],
+  obligations: [
+    { class: 'toast-announced', afterStep: 1, requiredTokens: ['Cluster deleted'], mustAnnounce: true },
+  ],
+};
+
+function stop(index: number, elementPath: string, tokens: Array<Pick<AnnouncementToken, 'kind' | 'text'>>): TranscriptStop {
   return {
     index,
     elementPath,
-    announcement: tokens.map(t => ({ ...t, fromTree: true, source: 'ax-tree' as const })),
+    announcement: tokens.map(t => ({
+      ...t,
+      fromTree: t.kind !== 'live',
+      source: t.kind === 'live' ? ('attribute' as const) : ('ax-tree' as const),
+    })),
   };
 }
 
 describe('runStructuralTier', () => {
-  it('emits no drafts when all obligations met structurally', () => {
+  it('emits no drafts when the obligation window has the expected role and a name', () => {
     const stops: TranscriptStop[] = [
-      stop(0, 'button#delete', [{ kind: 'name', text: 'Delete cluster' }, { kind: 'role', text: 'button' }]),
-      stop(1, 'dialog', [{ kind: 'role', text: 'dialog' }, { kind: 'name', text: 'Confirm deletion' }]),
+      stop(0, 'button:nth-child(1)', [{ kind: 'name', text: 'Delete cluster' }, { kind: 'role', text: 'button' }]),
+      stop(1, 'div:nth-child(9)', [{ kind: 'role', text: 'dialog' }, { kind: 'name', text: 'Confirm deletion' }]),
     ];
-    const drafts = runStructuralTier(baseContract, stops, 'clusters-page');
-    expect(drafts.filter(d => d.evidenceClass === 'deterministic')).toHaveLength(0);
+    expect(runStructuralTier(dialogContract, stops, 'clusters-page')).toHaveLength(0);
   });
 
-  it('emits deterministic draft when focused element has no name', () => {
+  it('does NOT flag nameless stops outside obligation windows (main landmark, skip targets)', () => {
     const stops: TranscriptStop[] = [
-      stop(0, 'button#delete', [{ kind: 'role', text: 'button' }]),
-      stop(1, 'dialog', [{ kind: 'role', text: 'dialog' }, { kind: 'name', text: 'Confirm deletion' }]),
+      stop(0, 'main:nth-child(1)', [{ kind: 'role', text: 'main' }]), // nameless, legitimate
+      stop(1, 'div:nth-child(9)', [{ kind: 'role', text: 'dialog' }, { kind: 'name', text: 'Confirm deletion' }]),
     ];
-    const drafts = runStructuralTier(baseContract, stops, 'clusters-page');
-    const det = drafts.filter(d => d.evidenceClass === 'deterministic');
-    expect(det.length).toBeGreaterThanOrEqual(1);
-    expect(det[0].rule).toBe('voicing/missing-name');
+    expect(runStructuralTier(dialogContract, stops, 'clusters-page')).toHaveLength(0);
   });
 
-  it('emits deterministic draft when mustAnnounce obligation has no live-region role', () => {
+  it('flags a nameless focused element INSIDE an obligation window', () => {
     const stops: TranscriptStop[] = [
-      stop(0, 'button#delete', [{ kind: 'name', text: 'Delete cluster' }, { kind: 'role', text: 'button' }]),
-      // dialog role missing — focus landed somewhere else
-      stop(1, 'main', [{ kind: 'name', text: 'Confirm deletion' }]),
+      stop(0, 'button:nth-child(1)', [{ kind: 'name', text: 'Delete cluster' }, { kind: 'role', text: 'button' }]),
+      stop(1, 'div:nth-child(9)', [{ kind: 'role', text: 'dialog' }]), // dialog with no accessible name
     ];
-    const drafts = runStructuralTier(baseContract, stops, 'clusters-page');
-    const det = drafts.filter(d => d.evidenceClass === 'deterministic');
-    expect(det.some(d => d.rule === 'voicing/missing-role')).toBe(true);
+    const drafts = runStructuralTier(dialogContract, stops, 'clusters-page');
+    expect(drafts.some(d => d.rule === 'voicing/missing-name' && d.confidence === 'fail')).toBe(true);
   });
 
-  it('emits deterministic draft when tab path exceeds maxTabPath', () => {
-    const contract: InteractionContract = { ...baseContract, maxTabPath: 2 };
+  it('flags a wrong or missing focusedRole in the obligation window', () => {
     const stops: TranscriptStop[] = [
-      stop(0, 'a#skip', [{ kind: 'name', text: 'Skip to content' }, { kind: 'role', text: 'link' }]),
-      stop(1, 'button#one', [{ kind: 'name', text: 'First' }, { kind: 'role', text: 'button' }]),
-      stop(2, 'button#two', [{ kind: 'name', text: 'Second' }, { kind: 'role', text: 'button' }]),
+      stop(0, 'button:nth-child(1)', [{ kind: 'name', text: 'Delete cluster' }, { kind: 'role', text: 'button' }]),
+      stop(1, 'main:nth-child(1)', [{ kind: 'role', text: 'main' }, { kind: 'name', text: 'Confirm deletion' }]),
     ];
-    const drafts = runStructuralTier(contract, stops, 'clusters-page');
-    const det = drafts.filter(d => d.rule === 'voicing/over-long-tab-path');
-    expect(det.length).toBeGreaterThanOrEqual(1);
-    expect(det[0].evidenceClass).toBe('deterministic');
+    const drafts = runStructuralTier(dialogContract, stops, 'clusters-page');
+    expect(drafts.some(d => d.rule === 'voicing/missing-role')).toBe(true);
   });
 
-  it('emits deterministic draft when a step stop is absent (unreachable focus)', () => {
-    // zero stops — keyboard walk produced nothing
-    const drafts = runStructuralTier(baseContract, [], 'clusters-page');
-    const det = drafts.filter(d => d.rule === 'voicing/unreachable-focus');
-    expect(det.length).toBeGreaterThanOrEqual(1);
-    expect(det[0].evidenceClass).toBe('deterministic');
+  it('mustAnnounce: flags a window with NO live token (nothing reached a live region)', () => {
+    const stops: TranscriptStop[] = [
+      stop(0, 'button:nth-child(1)', [{ kind: 'name', text: 'Delete' }, { kind: 'role', text: 'button' }]),
+      stop(1, 'button:nth-child(1)', [{ kind: 'name', text: 'Delete' }, { kind: 'role', text: 'button' }]),
+    ];
+    const drafts = runStructuralTier(toastContract, stops, 'clusters-page');
+    const hit = drafts.find(d => d.rule === 'voicing/missing-live-announcement');
+    expect(hit).toBeDefined();
+    expect(hit!.confidence).toBe('fail');
+    expect(hit!.evidenceClass).toBe('deterministic');
+  });
+
+  it('mustAnnounce: stays silent when a live token reached the window', () => {
+    const stops: TranscriptStop[] = [
+      stop(0, 'button:nth-child(1)', [{ kind: 'name', text: 'Delete' }, { kind: 'role', text: 'button' }]),
+      stop(1, 'button:nth-child(1)', [{ kind: 'name', text: 'Delete' }, { kind: 'live', text: 'Cluster deleted' }]),
+    ];
+    expect(runStructuralTier(toastContract, stops, 'clusters-page')
+      .filter(d => d.rule === 'voicing/missing-live-announcement')).toHaveLength(0);
+  });
+
+  it('flags an over-long tab path', () => {
+    const contract: InteractionContract = { ...dialogContract, maxTabPath: 1 };
+    const stops: TranscriptStop[] = [
+      stop(0, 'a:nth-child(1)', [{ kind: 'name', text: 'Skip' }, { kind: 'role', text: 'link' }]),
+      stop(1, 'div:nth-child(9)', [{ kind: 'role', text: 'dialog' }, { kind: 'name', text: 'Confirm deletion' }]),
+    ];
+    expect(runStructuralTier(contract, stops, 'clusters-page')
+      .some(d => d.rule === 'voicing/over-long-tab-path')).toBe(true);
+  });
+
+  it('flags unreachable focus on zero stops and on a missing obligation window', () => {
+    expect(runStructuralTier(dialogContract, [], 'clusters-page')
+      .some(d => d.rule === 'voicing/unreachable-focus')).toBe(true);
+    const onlyStepZero = [stop(0, 'button:nth-child(1)', [{ kind: 'name', text: 'x' }, { kind: 'role', text: 'button' }])];
+    expect(runStructuralTier(dialogContract, onlyStepZero, 'clusters-page')
+      .some(d => d.rule === 'voicing/unreachable-focus')).toBe(true);
   });
 });
 ```
@@ -297,7 +321,7 @@ describe('runStructuralTier', () => {
 - [ ] **Step 2: Run and confirm FAIL**
 
 ```
-npx vitest run tests/voicing/structural-tier.test.ts
+npx vitest run test/voicing/structural-tier.test.ts
 ```
 
 - [ ] **Step 3: Write the implementation**
@@ -305,14 +329,13 @@ npx vitest run tests/voicing/structural-tier.test.ts
 ```ts
 // src/voicing/structural-tier.ts
 import type {
-  Draft,
-  TranscriptStop,
-  InteractionContract,
-  SpeechObligation,
   AnnouncementToken,
+  Draft,
+  InteractionContract,
+  TranscriptStop,
 } from '../contracts/index.js';
 
-function hasTok(announcement: AnnouncementToken[], kind: 'name' | 'role' | 'state'): boolean {
+function hasTok(announcement: AnnouncementToken[], kind: AnnouncementToken['kind']): boolean {
   return announcement.some(t => t.kind === kind && t.text !== null && t.text.trim() !== '');
 }
 
@@ -341,6 +364,11 @@ function makeDraft(
   };
 }
 
+/**
+ * Scoped structural checks. Obligation windows carry the name/role requirements;
+ * stops outside windows are never blanket-checked (the keyboard walk already flags
+ * unnamed interactive elements, and legitimate nameless focus targets exist).
+ */
 export function runStructuralTier(
   contract: InteractionContract,
   stops: TranscriptStop[],
@@ -348,62 +376,35 @@ export function runStructuralTier(
 ): Draft[] {
   const drafts: Draft[] = [];
 
-  // 1. Unreachable focus: no stops at all
+  // 1. Unreachable focus: no stops at all.
   if (stops.length === 0) {
     drafts.push(makeDraft(
       'voicing/unreachable-focus',
       screenId,
       contract.surfaceId,
       'Keyboard focus could not reach any element defined in the interaction contract.',
-      'The keyboard walk returned zero stops. Focus may be trapped, the page may not load, or all interactive elements may be unreachable via Tab.',
-      'Ensure all interactive elements are reachable via sequential Tab navigation from the body.',
+      'The step run returned zero stops. Focus may be trapped, the page may not load, or the target may be unreachable via keyboard.',
+      'Ensure the contract steps can be executed from the body via keyboard.',
     ));
     return drafts;
   }
 
-  // 2. Missing name or role on each stop
-  for (const stop of stops) {
-    const el = stop.elementPath;
-    if (!hasTok(stop.announcement, 'name')) {
-      drafts.push(makeDraft(
-        'voicing/missing-name',
-        screenId,
-        el,
-        `An AT user receives no accessible name when focus reaches "${el}".`,
-        'The accessibility tree exposes no name for this element at focus time.',
-        'Add an accessible name via aria-label, aria-labelledby, or visible text content.',
-      ));
-    }
-    if (!hasTok(stop.announcement, 'role')) {
-      drafts.push(makeDraft(
-        'voicing/missing-role',
-        screenId,
-        el,
-        `An AT user receives no role announcement when focus reaches "${el}".`,
-        'The element has no ARIA role or semantic HTML role exposed in the accessibility tree.',
-        'Use a semantic HTML element or add an explicit role attribute.',
-      ));
-    }
-  }
-
-  // 3. Per-obligation structural checks (mustAnnounce = live region required)
+  // 2. Per-obligation window checks.
   for (const ob of contract.obligations) {
     const windowStop = stops.find(s => s.index === ob.afterStep);
     if (!windowStop) {
-      // step index not reached — unreachable focus for this obligation window
       drafts.push(makeDraft(
         'voicing/unreachable-focus',
         screenId,
         `step-${ob.afterStep}`,
         `Keyboard could not reach the element expected at step ${ob.afterStep}.`,
-        `No TranscriptStop recorded at step index ${ob.afterStep}.`,
+        `No TranscriptStop recorded at step index ${ob.afterStep} for obligation "${ob.class}".`,
         'Ensure the step sequence reaches the target element.',
       ));
       continue;
     }
 
-    // mustAnnounce: the focusedRole must be a live-region or dialog kind
-    if (ob.mustAnnounce && ob.focusedRole) {
+    if (ob.focusedRole) {
       const roleFound = windowStop.announcement.some(
         t => t.kind === 'role' && (t.text ?? '').toLowerCase() === ob.focusedRole!.toLowerCase(),
       );
@@ -412,22 +413,46 @@ export function runStructuralTier(
           'voicing/missing-role',
           screenId,
           windowStop.elementPath,
-          `After step ${ob.afterStep}, an AT user expects focus on a "${ob.focusedRole}" but no such role was announced.`,
-          `SpeechObligation "${ob.class}" requires focusedRole "${ob.focusedRole}" at step ${ob.afterStep}; observed role was absent or different.`,
-          `Ensure the element at step ${ob.afterStep} carries role="${ob.focusedRole}" or equivalent.`,
+          `After step ${ob.afterStep}, an AT user expects focus on a "${ob.focusedRole}" but hears a different or missing role.`,
+          `Obligation "${ob.class}" requires focusedRole "${ob.focusedRole}" at step ${ob.afterStep}.`,
+          `Ensure the element at step ${ob.afterStep} carries role="${ob.focusedRole}" or the equivalent semantic element.`,
+        ));
+      }
+      if (!hasTok(windowStop.announcement, 'name')) {
+        drafts.push(makeDraft(
+          'voicing/missing-name',
+          screenId,
+          windowStop.elementPath,
+          `The element focus lands on after step ${ob.afterStep} has no accessible name.`,
+          `Obligation "${ob.class}" targets this element; an AT user hears its role with no label.`,
+          'Add an accessible name via aria-label, aria-labelledby, or visible text content.',
         ));
       }
     }
+
+    // mustAnnounce: the consequence must actually REACH a live region. The evidence
+    // is a 'live' token in this step's window. Which words it contains is the
+    // voicing tier's business; that nothing arrived at all is a hard structural fail.
+    if (ob.mustAnnounce && !hasTok(windowStop.announcement, 'live')) {
+      drafts.push(makeDraft(
+        'voicing/missing-live-announcement',
+        screenId,
+        windowStop.elementPath,
+        `After step ${ob.afterStep}, nothing was announced: no text reached any live region.`,
+        `Obligation "${ob.class}" requires the interaction's consequence to be announced. No live-region update was observed in this step's window, so a screen-reader user gets silence.`,
+        'Render the confirmation into an aria-live region (role="status" or role="alert") that exists before the update fires.',
+      ));
+    }
   }
 
-  // 4. Over-long tab path
+  // 3. Over-long tab path.
   if (contract.maxTabPath !== undefined && stops.length > contract.maxTabPath) {
     drafts.push(makeDraft(
       'voicing/over-long-tab-path',
       screenId,
       contract.surfaceId,
       `An AT user must Tab ${stops.length} times to reach the target; the contract allows at most ${contract.maxTabPath}.`,
-      `Tab path length ${stops.length} exceeds maxTabPath ${contract.maxTabPath} defined in contract "${contract.contractId}".`,
+      `Tab path length ${stops.length} exceeds maxTabPath ${contract.maxTabPath} in contract "${contract.contractId}".`,
       'Reduce the number of focusable elements before the target, or add a skip-navigation link.',
     ));
   }
@@ -439,29 +464,29 @@ export function runStructuralTier(
 - [ ] **Step 4: Run and confirm PASS**
 
 ```
-npx vitest run tests/voicing/structural-tier.test.ts
+npx vitest run test/voicing/structural-tier.test.ts
 ```
 
 - [ ] **Step 5: Commit**
 
 ```
-feat(voicing): structural tier — deterministic drafts for missing name/role/state, unreachable focus, over-long tab path
+feat(voicing): structural tier: deterministic drafts for missing name/role/state, unreachable focus, over-long tab path
 ```
 
 ---
 
-## Task 4 — Voicing tier (preview, advisory)
+## Task 4: Voicing tier (preview, advisory)
 
 The voicing tier matches transcript tokens inside each obligation's step window. It emits `preview` findings. It never gates. `promotedObligations` are checked at runtime to decide whether to flip `preview` to `deterministic` for that obligation class.
 
 **Files:**
 - `src/voicing/voicing-tier.ts`
-- `tests/voicing/voicing-tier.test.ts`
+- `test/voicing/voicing-tier.test.ts`
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-// tests/voicing/voicing-tier.test.ts
+// test/voicing/voicing-tier.test.ts
 import { describe, it, expect } from 'vitest';
 import type { TranscriptStop, InteractionContract, Draft } from '../../src/contracts/index.js';
 import { runVoicingTier } from '../../src/voicing/voicing-tier.js';
@@ -489,11 +514,31 @@ function stop(index: number, texts: string[]): TranscriptStop {
   };
 }
 
+function liveStop(index: number, focusTexts: string[], liveTexts: string[]): TranscriptStop {
+  return {
+    index,
+    elementPath: `el-${index}`,
+    announcement: [
+      ...focusTexts.map(text => ({ kind: 'name' as const, text, fromTree: true, source: 'ax-tree' as const })),
+      ...liveTexts.map(text => ({ kind: 'live' as const, text, fromTree: false, source: 'attribute' as const })),
+    ],
+  };
+}
+
 describe('runVoicingTier', () => {
   it('emits no draft when obligation tokens are present in the window', () => {
     const stops: TranscriptStop[] = [
       stop(0, ['Delete cluster', 'button']),
       stop(1, ['Cluster deleted', 'Alert success']),
+    ];
+    const drafts = runVoicingTier(contract, stops, 'clusters-page', []);
+    expect(drafts).toHaveLength(0);
+  });
+
+  it('satisfies an obligation from LIVE tokens (the toast case: focus text alone would miss)', () => {
+    const stops: TranscriptStop[] = [
+      stop(0, ['Delete cluster', 'button']),
+      liveStop(1, ['Delete cluster'], ['Cluster deleted', 'Alert success toast']),
     ];
     const drafts = runVoicingTier(contract, stops, 'clusters-page', []);
     expect(drafts).toHaveLength(0);
@@ -525,7 +570,7 @@ describe('runVoicingTier', () => {
     // structural tier handles unreachable; voicing tier is lenient on missing window
     const stops: TranscriptStop[] = [stop(0, ['Delete cluster', 'button'])];
     const drafts = runVoicingTier(contract, stops, 'clusters-page', []);
-    // No stop at index 1 — voicing tier records a preview gap
+    // No stop at index 1: voicing tier records a preview gap
     expect(drafts[0]?.evidenceClass).toBe('preview');
   });
 
@@ -543,7 +588,7 @@ describe('runVoicingTier', () => {
 - [ ] **Step 2: Run and confirm FAIL**
 
 ```
-npx vitest run tests/voicing/voicing-tier.test.ts
+npx vitest run test/voicing/voicing-tier.test.ts
 ```
 
 - [ ] **Step 3: Write the implementation**
@@ -603,7 +648,7 @@ export function runVoicingTier(
       : 'preview';
 
     if (!windowStop) {
-      // No stop in this window — emit a gap finding
+      // No stop in this window: emit a gap finding
       drafts.push(makeDraft(
         'voicing/missing-announcement',
         screenId,
@@ -638,48 +683,38 @@ export function runVoicingTier(
 - [ ] **Step 4: Run and confirm PASS**
 
 ```
-npx vitest run tests/voicing/voicing-tier.test.ts
+npx vitest run test/voicing/voicing-tier.test.ts
 ```
 
 - [ ] **Step 5: Commit**
 
 ```
-feat(voicing): voicing tier — preview token matching with promotedObligations promotion
+feat(voicing): voicing tier: preview token matching with promotedObligations promotion
 ```
 
 ---
 
-## Task 5 — `VirtualSrProvider` (the Provider)
+## Task 5: `VirtualSrProvider` (the Provider)
 
 Wires both tiers together into a `Provider` that the `CheckRunner` (Phase 2) can call. Accepts contracts via config (loaded from the `requirements` file path or a direct list). Reads `TranscriptStop[]` from a `StepRunner` run, then calls both tiers and merges their `Draft[]`.
 
 **Files:**
 - `src/voicing/virtual-sr-provider.ts`
-- `tests/voicing/virtual-sr-provider.test.ts`
+- `test/voicing/virtual-sr-provider.test.ts`
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-// tests/voicing/virtual-sr-provider.test.ts
+// test/voicing/virtual-sr-provider.test.ts
 import { describe, it, expect, vi } from 'vitest';
 import type {
-  Draft, InteractionContract, TranscriptStop, ProviderContext, UsablConfig, Page,
+  InteractionContract, TranscriptStop, ProviderContext, UsablConfig,
 } from '../../src/contracts/index.js';
 import type { StepRunner } from '../../src/contracts/index.js';
 import { makeVirtualSrProvider } from '../../src/voicing/virtual-sr-provider.js';
-import { FakeTranscriptReader } from '../../src/voicing/fakes.js';
+import { makeFakePage } from '../../src/deps/fakes.js';
 
-// Minimal fake Page (satisfies interface; methods not called in these tests)
-function fakePage(): Page {
-  const noop = async () => {};
-  return {
-    gotoReady: noop, focusBody: noop, tab: noop, press: noop, close: noop,
-    setViewport: noop, setZoom: noop, setReducedMotion: noop,
-    activeNode: async () => null, activePath: async () => '',
-    axAt: async () => null, queryAll: async () => [],
-    getComputedStyle: async () => '', screenshot: async () => Buffer.alloc(0),
-  };
-}
+const fakePage = makeFakePage; // methods not called in these tests; complete fake from Phase 1
 
 const contract: InteractionContract = {
   contractId: 'modal-contract',
@@ -775,7 +810,7 @@ describe('VirtualSrProvider', () => {
 - [ ] **Step 2: Run and confirm FAIL**
 
 ```
-npx vitest run tests/voicing/virtual-sr-provider.test.ts
+npx vitest run test/voicing/virtual-sr-provider.test.ts
 ```
 
 - [ ] **Step 3: Write the implementation**
@@ -789,7 +824,7 @@ import { runStructuralTier } from './structural-tier.js';
 import { runVoicingTier } from './voicing-tier.js';
 
 /**
- * VirtualSrProvider — the Phase 4 Provider.
+ * VirtualSrProvider: the Phase 4 Provider.
  *
  * - Declares capability 'live': it drives real browser focus via StepRunner.
  * - Returns Draft[] only; never decides a verdict.
@@ -840,7 +875,7 @@ export function makeVirtualSrProvider(
 - [ ] **Step 4: Run and confirm PASS**
 
 ```
-npx vitest run tests/voicing/virtual-sr-provider.test.ts
+npx vitest run test/voicing/virtual-sr-provider.test.ts
 ```
 
 - [ ] **Step 5: Commit**
@@ -851,17 +886,17 @@ feat(voicing): VirtualSrProvider wires structural and voicing tiers as a Provide
 
 ---
 
-## Task 6 — Promotion invariant tests
+## Task 6: Promotion invariant tests
 
 These tests assert the invariants in one place: `preview` never mints `verified`, promoted findings gate as `deterministic`, no runtime self-promotion path exists in the provider code.
 
 **Files:**
-- `tests/voicing/promotion-invariants.test.ts`
+- `test/voicing/promotion-invariants.test.ts`
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-// tests/voicing/promotion-invariants.test.ts
+// test/voicing/promotion-invariants.test.ts
 import { describe, it, expect } from 'vitest';
 import type { TranscriptStop, InteractionContract, UsablConfig } from '../../src/contracts/index.js';
 import { makeVirtualSrProvider } from '../../src/voicing/virtual-sr-provider.js';
@@ -907,7 +942,8 @@ function cfg(promoted: string[]): UsablConfig {
   };
 }
 
-function fakePage(): any { return {}; }
+import { makeFakePage } from '../../src/deps/fakes.js';
+const fakePage = makeFakePage;
 
 describe('promotion invariants', () => {
   it('without promotion, all voicing findings are preview', async () => {
@@ -945,34 +981,30 @@ describe('promotion invariants', () => {
 });
 ```
 
-- [ ] **Step 2: Run and confirm FAIL**
+- [ ] **Step 2: Run: expected PASS immediately.** This is an invariant suite over
+  already-built code, so there is no red step. If any case fails, the invariant was
+  broken upstream: fix the provider or the tiers, never the test.
 
 ```
-npx vitest run tests/voicing/promotion-invariants.test.ts
+npx vitest run test/voicing/promotion-invariants.test.ts
 ```
 
-- [ ] **Step 3: Run and confirm PASS** (no code change needed — invariants already encoded)
+- [ ] **Step 3: Commit**
 
 ```
-npx vitest run tests/voicing/promotion-invariants.test.ts
-```
-
-- [ ] **Step 4: Commit**
-
-```
-test(voicing): promotion invariant suite — preview never gates, only config-listed classes promote
+test(voicing): promotion invariant suite: preview never gates, only config-listed classes promote
 ```
 
 ---
 
-## Task 7 — Full voicing test suite pass
+## Task 7: Full voicing test suite pass
 
 Run all voicing tests together to confirm nothing regresses across tasks.
 
 - [ ] **Step 1: Run full suite**
 
 ```
-npx vitest run tests/voicing/
+npx vitest run test/voicing/
 ```
 
 Expected: all tests pass, zero failures.
@@ -985,44 +1017,32 @@ refactor(voicing): clean up after full suite run
 
 ---
 
-## Task 8 — Integration task (labeled, not unit-tested here)
+## Task 8: Offline calibration harness (documented seam, no code in this phase)
 
-This task is a labeled seam, not implemented in this phase. It wires the real `@guidepup/virtual-screen-reader` behind the `TranscriptReader` interface. It must never run in unit tests.
+No file is created here (a committed skeleton that throws is dead weight). This section
+records how `promotedObligations` gets populated, so the seam is real without shipping
+stubs:
 
-**File to create later:** `src/voicing/guidepup-transcript-reader.ts`
-
-Architecture notes for the implementer:
-
-- `@guidepup/virtual-screen-reader` automates VoiceOver and NVDA. It does NOT automate Orca.
-- The in-loop unit-test provider is always `FakeTranscriptReader`.
-- Orca-on-Fedora is the offline calibration harness for promotion decisions. Its transcript is captured via `speech-dispatcher` log or manual transcription, not via guidepup.
-- NVDA is the hero DEMO voice, captured once via a Windows VM. It is not the in-loop reader.
-- The `GuidepupTranscriptReader` drives a real Page via guidepup's `VoiceOver` or `NVDA` class. It returns `TranscriptStop[]` by mapping the raw speech events to `AnnouncementToken[]`. The comparator invariant applies: never normalize the observed tokens.
-
-```ts
-// src/voicing/guidepup-transcript-reader.ts  (skeleton only — integration task)
-// import { virtual } from '@guidepup/virtual-screen-reader';
-// import type { TranscriptReader } from './transcript-reader.js';
-// import type { Page, TranscriptStop } from '../contracts/index.js';
-//
-// export class GuidepupTranscriptReader implements TranscriptReader {
-//   constructor(private readonly page: Page) {}
-//   async read(): Promise<TranscriptStop[]> {
-//     // TODO: drive virtual SR, map speech events to TranscriptStop[]
-//     throw new Error('GuidepupTranscriptReader: integration wiring not yet implemented');
-//   }
-// }
-```
-
-- [ ] **Step 1: Create the skeleton file** (comment-only, marks the seam clearly)
-
-```
-feat(voicing): add GuidepupTranscriptReader skeleton — integration seam for @guidepup/virtual-screen-reader
-```
+- **In-loop evidence** is always the AX-tree transcript plus live tokens from the
+  Phase 2 StepRunner. No screen-reader automation library runs inside the engine.
+- **Orca-on-Fedora is the offline calibration harness.** For each obligation class, run
+  the same interaction under Orca (transcript via the speech-dispatcher log or manual
+  transcription) and measure the match rate between what the engine's transcript
+  predicted and what Orca actually said. A class whose match rate holds up earns its
+  place in `promotedObligations`; the config edit is itself an `approval_required`
+  event because the config is guarded.
+- **NVDA is the demo voice**, recorded once from a Windows VM after the hero bug is
+  locked. It is never the in-loop reader.
+- **Factual note for the implementer:** `@guidepup/virtual-screen-reader` is a
+  headless, DOM-based virtual screen reader. The separate `@guidepup/guidepup` package
+  drives real VoiceOver and NVDA. Either can strengthen the OFFLINE harness later;
+  neither enters the loop. If one is adopted, its raw transcript is stored verbatim
+  next to the calibration results, and matching uses the same normalize-for-comparison,
+  display-raw rule as everything else.
 
 ---
 
-## Task 9 — Export from package index
+## Task 9: Export from package index
 
 Wire the new modules into the package's public surface so the `CheckRunner` (Phase 2) can import them.
 
@@ -1036,8 +1056,6 @@ export { makeVirtualSrProvider } from './voicing/virtual-sr-provider.js';
 export { runStructuralTier } from './voicing/structural-tier.js';
 export { runVoicingTier } from './voicing/voicing-tier.js';
 export { normalizeToken, obligationSatisfied } from './voicing/normalize.js';
-export type { TranscriptReader } from './voicing/transcript-reader.js';
-export { FakeTranscriptReader } from './voicing/fakes.js';
 ```
 
 - [ ] **Step 2: Rebuild**
@@ -1060,17 +1078,17 @@ feat(voicing): export voicing lane modules from package index
 
 | Concern | Status |
 |---|---|
-| Frozen contracts used verbatim | `InteractionContract`, `SpeechObligation`, `Step`, `TranscriptStop`, `AnnouncementToken`, `Draft`, `Provider`, `ProviderContext`, `Capability`, `UsablConfig`, `Page`, `StepRunner` all imported from `src/contracts/index.ts` — no redeclaration |
+| Frozen contracts used verbatim | `InteractionContract`, `SpeechObligation`, `Step`, `TranscriptStop`, `AnnouncementToken`, `Draft`, `Provider`, `ProviderContext`, `Capability`, `UsablConfig`, `Page`, `StepRunner` all imported from `src/contracts/index.ts`: no redeclaration |
 | Provider never decides verdict | `VirtualSrProvider.run()` returns `Draft[]` only |
 | `preview` never mints `verified` | `evidenceClass: 'preview'` findings carry `confidence: 'unverified'`; gate (Phase 1) filters by `evidenceClass` |
 | `verified` and receipt reserved | No receipt logic in this phase; receipt is Phase 1 gate concern |
-| Comparator invariant | `normalizeToken` called on obligation tokens only; observed `AnnouncementToken.text` compared raw (lowercased in `obligationSatisfied` for case-insensitive match, never stripped) |
-| Structural tier gates | Emits `evidenceClass: 'deterministic'`, `confidence: 'fail'` — picked up by Phase 1 gate |
+| Comparator invariant | Matching normalizes BOTH sides (case, punctuation, whitespace, token spanning); findings display raw observed text verbatim. Pinned by the Task 2 matrix. |
+| Live-region evidence | `kind: 'live'` tokens from the StepRunner satisfy toast obligations; `mustAnnounce` without a live token is a deterministic `voicing/missing-live-announcement` fail. The toast hero bug is detectable end to end. |
+| Structural tier gates | Emits `evidenceClass: 'deterministic'`, `confidence: 'fail'`; checks SCOPED to obligation windows plus unreachable-focus and tab-path facts. No blanket per-stop noise. |
 | Voicing tier advisory by default | Emits `evidenceClass: 'preview'`, `confidence: 'unverified'` |
-| Promotion is config-only | `promotedObligations` list from `UsablConfig`; engine never writes to it at runtime |
-| `StepRunner` seam reused | `VirtualSrProvider` calls `stepRunner.run(page, steps)` — exact frozen signature from `00-plan-set.md` |
-| `@guidepup` behind seam | `TranscriptReader` interface isolates guidepup; unit tests use `FakeTranscriptReader` only |
-| No placeholders | All code blocks are complete and runnable |
-| Type consistency | All types imported from frozen `src/contracts/index.ts`; no local redeclarations |
-| Screen-reader split honored | Orca = offline calibration (not guidepup); NVDA = demo voice (Windows VM); Virtual SR = in-loop unit tests |
-| Capability declared | `capabilities: ['live']` — static mode skips this provider and records a `capability-denied` gap |
+| Promotion is config-only | `promotedObligations` list from `UsablConfig`; the config is guarded, so a promotion edit is itself an `approval_required` event; the engine never writes to it at runtime |
+| `StepRunner` seam reused | `VirtualSrProvider` calls `stepRunner.run(page, steps)`: exact frozen signature from `00-plan-set.md`; no reimplementation |
+| No dead seams | No `TranscriptReader` class ships; offline calibration is documented in Task 8 without stub files |
+| Type consistency | All types imported from frozen `src/contracts/index.ts`; fakes from `makeFakePage`; no local redeclarations, no `as any` |
+| Screen-reader split honored | AX transcript + live tokens = in-loop evidence; Orca = offline calibration; NVDA = demo voice (Windows VM) |
+| Capability declared | `capabilities: ['live']`: static mode skips this provider and records a `capability-denied` gap |

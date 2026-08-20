@@ -2,97 +2,129 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the `usabl-app` PatternFly fixture with a single structural hero bug that produces a deterministic verdict flip (`regression` → `verified`), a golden-oracle test suite that makes all four verdicts plus `idle` reachable from fixed inputs, and a measurement-only Playwright pass against Fleet Insights that reports `coverage` / `not_covered` without gating.
+**Goal:** Scaffold the `usabl-app` PatternFly v6 fixture (the repo does not exist yet), plant the hero bug (modal focus not returned on close) behind a `?variant=` switch, prove the CLEAN variant yields zero findings through the full provider stack (the false-positive oracle), drive the broken→fixed verdict flip end to end through the real engine with a receipt that re-verifies, and run a measurement-only pass against Fleet Insights that reports coverage and gaps without gating anything.
 
-**Architecture:**
-- The gate is the single verdict authority. Only `deterministic` (or promoted / `human-confirmed`) evidence mints `verified` or `regression`. The receipt is reserved for reproducible evidence.
-- The four verdicts are `verified` / `regression` / `not_covered` / `approval_required`, plus `idle` (`verdict: null` when `nothingToCheck`).
-- Hero bug: **modal focus not returned on close** (`pf-modal-focus-return`). This is WCAG 2.4.3 / 4.1.2, structural, deterministic, and the most compelling demo defect — a screen-reader user loses their place in the document.
-- Broken vs fixed states are encoded as `?variant=broken|fixed` in the fixture app. No base-ref rebuild is needed; the two states serve as the before/after in the demo.
-- Fleet Insights: measurement-only (no CI, no gating). Session via Playwright `storageState` exported once from a real browser login. Never committed.
+**Architecture (all frozen contracts consumed VERBATIM from `usabl` Phase 1):**
+- Everything imports `Result`, `Receipt`, `Coverage`, `CoverageGap`, `Finding`, `Draft`, `ScreenScan` (with `gaps`), `Deps`, `UsablConfig`, `RunOptions` from `usabl`'s `src/contracts/index.ts`. This plan invents NO types, NO alternate `gate()` signature, NO `baseFindings` mechanism: the ratchet is the committed evidence floor, exactly as Phases 1 and 3 built it.
+- The five-outcome golden oracle over fakes already lives in Phase 1 Task 15 and is not duplicated here. This phase adds the two things fakes cannot give: a real browser flip and a real-app measurement.
+- Hero bug: `pf-modal-focus-return`, detected by the Phase 2 interaction probe (click the trigger, Escape, `activeElementIs(trigger)`). WCAG 2.4.3, structural, and felt: a screen-reader user loses their place.
+- Broken vs fixed states are `?variant=broken|fixed` in the fixture app. No rebuild between demo states.
+- Fleet Insights: measurement-only. No CI, no gating, no receipt. Session via Playwright `storageState` exported once from a real login. Never committed.
 
 **Tech Stack:**
-- TypeScript (ESM, strict), Node 22, Vitest
-- `usabl-app`: React 18 + Vite + PatternFly 6 SPA (same stack as Fleet Insights)
-- `usabl`: core engine (Phases 1–6 contracts consumed verbatim; no re-invention)
-- Playwright (real browser in integration / measurement tasks only; fakes in unit tests)
-- Frozen contracts consumed: `Result`, `Receipt`, `Coverage`, `CoverageGap`, `Finding`, `Draft`, `Deps`, `ScreenScan`, `Verdict`
+- `usabl-app`: React 18 + Vite + PatternFly 6 + react-router-dom, Vitest + @testing-library/react + jsdom for component tests.
+- `usabl`: the engine (Phases 1-6), Playwright + CDP driver from Phase 2.
 
 ---
 
-## Task 1 — Fixture app: broken and fixed modal states
+## Task 1: Scaffold `usabl-app` (the repo does not exist yet)
+
+**Files:** the whole `usabl-app` repo skeleton.
+
+> **Operator step first:** creating the `usabl-dev/usabl-app` remote is repo creation
+> and stays with the operator. The agent scaffolds LOCALLY (`git init`) and stops;
+> pushing happens after the operator creates the private remote.
+
+- [ ] **Step 1: Scaffold the app**
+
+```bash
+npm create vite@latest usabl-app -- --template react-ts
+cd usabl-app
+npm install @patternfly/react-core react-router-dom
+npm install -D vitest @testing-library/react @testing-library/jest-dom jsdom
+```
+
+Vitest config: `environment: 'jsdom'`, include `src/**/*.test.tsx`.
+
+- [ ] **Step 2: App structure** (real routes on a shared shell so coverage fan-out is
+  demonstrable; grow toward the full ground-truth fixture as detection breadth lands):
+
+```
+usabl-app/
+  src/
+    App.tsx                  router: /, /clusters, /settings on a shared AppShell
+    components/AppShell.tsx  masthead + sidebar (PF6 Page)
+    components/StatusBadge.tsx  shared by Overview and Clusters (fan-out proof)
+    components/DemoModal.tsx unchanged between variants except the planted defect
+    pages/Overview.tsx
+    pages/Clusters.tsx       hosts the hero bug
+    pages/Settings.tsx       IDENTICAL in both variants (false-positive control)
+    lib/variant.ts           readVariant(): 'broken' | 'fixed' from ?variant=
+  usabl.config.json          the engine gates THIS repo (see Step 3)
+  usabl.routes.json          sidecar route manifest with real entry files
+  .claude/settings.json      Stop hook → node ../usabl/dist/stop-hook-runner.js (demo wiring)
+  .gitignore                 includes .usabl/ and storageState*.json
+```
+
+- [ ] **Step 3: Install usabl into the fixture repo.** `usabl.config.json` (frozen §22
+  shape): `appBaseUrl: "http://127.0.0.1:5173"`, `uiFileGlobs: ["src/**"]`, discovery
+  routerFile `src/App.tsx` with wide-blast globs (`src/App.tsx`, `src/main.tsx`,
+  `src/**/*.css`, `index.html`, `vite.config.ts`), one manual surface entry per page,
+  guardedPaths `["usabl.config.json", ".usabl-evidence.json", ".usabl-waivers.json"]`.
+  `usabl.routes.json` maps `clusters → src/pages/Clusters.tsx`, etc. Commit empty
+  floor and waiver ledgers so the guard has a clean anchor.
+
+- [ ] **Step 4: Commit** `chore: scaffold usabl-app fixture (PF6, routes, usabl installed)`
+
+---
+
+## Task 2: Fixture: broken and fixed modal states
 
 **Files:**
 - `usabl-app/src/components/DemoModal.tsx`
-- `usabl-app/src/pages/Clusters.tsx` (adds a button that opens the modal)
-- `usabl-app/src/lib/variant.ts` (reads `?variant=` query param)
-- `usabl-app/src/components/__tests__/DemoModal.test.tsx`
+- `usabl-app/src/pages/Clusters.tsx`
+- `usabl-app/src/lib/variant.ts`
+- `usabl-app/src/components/DemoModal.test.tsx`
 
-### Steps
-
-- [ ] **Write the failing test** (`usabl-app/src/components/__tests__/DemoModal.test.tsx`):
+- [ ] **Step 1: Write the failing component test**
 
 ```tsx
-// Tests that broken variant does NOT return focus and fixed variant DOES.
+// usabl-app/src/components/DemoModal.test.tsx
 import { render, screen, fireEvent } from '@testing-library/react';
-import { DemoModal } from '../DemoModal.js';
+import { DemoModal } from './DemoModal.js';
+
+function withTrigger(run: (trigger: HTMLButtonElement) => void): void {
+  const trigger = document.createElement('button');
+  trigger.textContent = 'Open';
+  document.body.appendChild(trigger);
+  trigger.focus();
+  try { run(trigger); } finally { document.body.removeChild(trigger); }
+}
 
 describe('DemoModal', () => {
-  it('broken: focus does not return to trigger on close', () => {
-    const trigger = document.createElement('button');
-    trigger.textContent = 'Open';
-    document.body.appendChild(trigger);
-    trigger.focus();
-
-    render(<DemoModal variant="broken" triggerEl={trigger} defaultOpen />);
-    const closeBtn = screen.getByRole('button', { name: /close/i });
-    fireEvent.click(closeBtn);
-
-    expect(document.activeElement).not.toBe(trigger);
-    document.body.removeChild(trigger);
+  it('broken: focus does not return to the trigger on close', () => {
+    withTrigger((trigger) => {
+      render(<DemoModal variant="broken" triggerEl={trigger} defaultOpen />);
+      fireEvent.click(screen.getByRole('button', { name: /close/i }));
+      expect(document.activeElement).not.toBe(trigger);
+    });
   });
 
-  it('fixed: focus returns to trigger on close', () => {
-    const trigger = document.createElement('button');
-    trigger.textContent = 'Open';
-    document.body.appendChild(trigger);
-    trigger.focus();
-
-    render(<DemoModal variant="fixed" triggerEl={trigger} defaultOpen />);
-    const closeBtn = screen.getByRole('button', { name: /close/i });
-    fireEvent.click(closeBtn);
-
-    expect(document.activeElement).toBe(trigger);
-    document.body.removeChild(trigger);
+  it('fixed: focus returns to the trigger on close', () => {
+    withTrigger((trigger) => {
+      render(<DemoModal variant="fixed" triggerEl={trigger} defaultOpen />);
+      fireEvent.click(screen.getByRole('button', { name: /close/i }));
+      expect(document.activeElement).toBe(trigger);
+    });
   });
 });
 ```
 
-- [ ] **Run and confirm FAIL:** `cd usabl-app && npx vitest run src/components/__tests__/DemoModal.test.tsx`
-  - Expected: `Cannot find module '../DemoModal.js'`
+- [ ] **Step 2: Run and confirm FAIL**, then implement:
 
-- [ ] **Write `usabl-app/src/lib/variant.ts`:**
-
+`src/lib/variant.ts`:
 ```ts
 export type Variant = 'broken' | 'fixed';
-
 export function readVariant(): Variant {
-  const v = new URLSearchParams(window.location.search).get('variant');
-  return v === 'fixed' ? 'fixed' : 'broken';
+  return new URLSearchParams(window.location.search).get('variant') === 'fixed' ? 'fixed' : 'broken';
 }
 ```
 
-- [ ] **Write `usabl-app/src/components/DemoModal.tsx`:**
-
+`src/components/DemoModal.tsx` (PF6 Modal; verify the import surface against the
+installed @patternfly/react-core major during the build):
 ```tsx
-import React, { useEffect, useRef } from 'react';
-import {
-  Modal,
-  ModalHeader,
-  ModalBody,
-  ModalFooter,
-  Button,
-} from '@patternfly/react-core';
+import React from 'react';
+import { Modal, ModalHeader, ModalBody, ModalFooter, Button } from '@patternfly/react-core';
 
 export interface DemoModalProps {
   variant: 'broken' | 'fixed';
@@ -106,828 +138,322 @@ export function DemoModal({ variant, triggerEl, defaultOpen = false }: DemoModal
   const handleClose = () => {
     setIsOpen(false);
     if (variant === 'fixed' && triggerEl) {
-      // FIXED: return focus to the element that opened the modal
-      triggerEl.focus();
+      triggerEl.focus(); // FIXED: return focus to the element that opened the modal
     }
-    // BROKEN: intentionally omits focus return — the hero defect
+    // BROKEN: intentionally omits the focus return. This is the planted hero defect.
   };
 
   return (
-    <>
-      {!defaultOpen && (
-        <Button onClick={() => setIsOpen(true)}>Open cluster details</Button>
-      )}
-      <Modal
-        isOpen={isOpen}
-        onClose={handleClose}
-        aria-labelledby="demo-modal-title"
-      >
-        <ModalHeader title="Cluster Details" labelId="demo-modal-title" />
-        <ModalBody>
-          <p>Production cluster — 3 nodes, healthy.</p>
-        </ModalBody>
-        <ModalFooter>
-          <Button variant="primary" onClick={handleClose}>
-            Confirm
-          </Button>
-          <Button variant="link" onClick={handleClose}>
-            Close
-          </Button>
-        </ModalFooter>
-      </Modal>
-    </>
+    <Modal isOpen={isOpen} onClose={handleClose} aria-labelledby="demo-modal-title">
+      <ModalHeader title="Cluster details" labelId="demo-modal-title" />
+      <ModalBody><p>Production cluster: 3 nodes, healthy.</p></ModalBody>
+      <ModalFooter>
+        <Button variant="primary" onClick={handleClose}>Confirm</Button>
+        <Button variant="link" onClick={handleClose}>Close</Button>
+      </ModalFooter>
+    </Modal>
   );
 }
 ```
 
-- [ ] **Write `usabl-app/src/pages/Clusters.tsx`** (minimal; integrates the modal):
+`src/pages/Clusters.tsx`: a "View cluster details" trigger button carrying
+`aria-haspopup="dialog"` (the Phase 2 probe keys off it), `readVariant()` at page
+level, and the modal mounted on open with `triggerEl` from a ref.
 
-```tsx
-import React, { useRef } from 'react';
-import {
-  PageSection,
-  Title,
-  Button,
-} from '@patternfly/react-core';
-import { DemoModal } from '../components/DemoModal.js';
-import { readVariant } from '../lib/variant.js';
-
-export function ClustersPage() {
-  const variant = readVariant();
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const [modalOpen, setModalOpen] = React.useState(false);
-
-  return (
-    <PageSection>
-      <Title headingLevel="h1">Clusters</Title>
-      <Button ref={triggerRef} onClick={() => setModalOpen(true)}>
-        View cluster details
-      </Button>
-      {modalOpen && (
-        <DemoModal
-          variant={variant}
-          triggerEl={triggerRef.current}
-          defaultOpen
-        />
-      )}
-    </PageSection>
-  );
-}
-```
-
-- [ ] **Run and confirm PASS:** `cd usabl-app && npx vitest run src/components/__tests__/DemoModal.test.tsx`
-
-- [ ] **Commit:** `feat(usabl-app): add DemoModal with broken/fixed focus-return states`
+- [ ] **Step 3: Run and confirm PASS. Commit** `feat(usabl-app): DemoModal with broken/fixed focus-return variants`
 
 ---
 
-## Task 2 — Golden oracle: verified and idle
+## Task 3: False-positive oracle: the fixed variant yields ZERO findings (integration)
 
 **Files:**
-- `usabl/tests/oracle/verdicts.test.ts`
+- `usabl/test/integration/fixture-clean.test.ts`
 
-This task establishes the two clean-path scenarios. Tests run over in-memory fakes only; no real browser.
+> Integration: requires the usabl-app dev server (`npm run dev`, port 5173) and a real
+> browser. Guard with `USABL_INTEGRATION=1`.
 
-### Steps
+"Clean means zero findings" is the trust property. If any provider fires on the FIXED
+variant (axe defaults, kebab states, walk), that is a harness bug or a fixture bug and
+it gets fixed HERE, before the demo flip is attempted. Settings stays identical in
+both variants as the control.
 
-- [ ] **Write the failing test stubs** (verified and idle only; other verdicts added in Tasks 3–4):
+- [ ] **Step 1: Write the test**
 
 ```ts
-// usabl/tests/oracle/verdicts.test.ts
+// usabl/test/integration/fixture-clean.test.ts
 import { describe, it, expect } from 'vitest';
-import { gate } from '../../src/gate.js';
-import { makeReceipt, hashPolicy } from '../../src/receipt.js';
-import type {
-  Result,
-  Draft,
-  Finding,
-  Coverage,
-  ScreenScan,
-  Verdict,
-} from '../../src/types.js';
-
-// ---- helpers ----------------------------------------------------------------
-
-function makeDraft(overrides: Partial<Draft> = {}): Draft {
-  return {
-    ruleId: 'pf-modal-focus-return',
-    layer: 'pf',
-    evidenceClass: 'deterministic',
-    severity: 'critical',
-    wcag: ['2.4.3', '4.1.2'],
-    elementKey: 'button#open-cluster',
-    identityBasis: 'element-key',
-    message: 'Modal does not return focus on close.',
-    ...overrides,
-  };
-}
-
-function makeCoverage(overrides: Partial<Coverage> = {}): Coverage {
-  return {
-    changedFiles: ['src/pages/Clusters.tsx'],
-    affected: [{ screenId: 'clusters', url: 'http://localhost:5173/clusters', provenance: 'route-graph' }],
-    unresolvedFiles: [],
-    gaps: [],
-    nothingToCheck: false,
-    ...overrides,
-  };
-}
-
-function makeScreenScan(drafts: Draft[] = []): ScreenScan {
-  return {
-    screenId: 'clusters',
-    url: 'http://localhost:5173/clusters',
-    stops: [],
-    drafts,
-  };
-}
-
-// ---- idle -------------------------------------------------------------------
-
-describe('oracle: idle (nothingToCheck)', () => {
-  it('returns verdict null and exitCode 0', () => {
-    const coverage = makeCoverage({ nothingToCheck: true, changedFiles: ['README.md'], affected: [] });
-    const result = gate({ screens: [], coverage, baseFindings: [], policyHash: 'abc123', runnerVersion: '0.1.0' });
-
-    expect(result.verdict).toBeNull();
-    expect(result.exitCode).toBe(0);
-    expect(result.receipt).toBeNull();
-    expect(result.findings).toHaveLength(0);
-    expect(result).toMatchSnapshot();
-  });
-});
-
-// ---- verified ---------------------------------------------------------------
-
-describe('oracle: verified', () => {
-  it('mints a receipt when all deterministic findings are carried and there are no gaps', () => {
-    const draft = makeDraft();
-    // Base has this finding already; current run carries it (status carried = no regression)
-    const result = gate({
-      screens: [makeScreenScan([draft])],
-      coverage: makeCoverage(),
-      baseFindings: [draft],       // same finding in base → carried
-      policyHash: 'abc123',
-      runnerVersion: '0.1.0',
-    });
-
-    expect(result.verdict).toBe('verified');
-    expect(result.exitCode).toBe(0);
-    expect(result.receipt).not.toBeNull();
-    expect(result.receipt?.verdict).toBe('verified');
-    expect(result.findings.every(f => f.status !== 'new')).toBe(true);
-    expect(result).toMatchSnapshot();
-  });
-});
-```
-
-- [ ] **Run and confirm FAIL:** `cd usabl && npx vitest run tests/oracle/verdicts.test.ts`
-  - Expected: `Cannot find module '../../src/gate.js'` (phases 1–6 contracts not yet wired into this test path) OR type/import errors.
-
-- [ ] **Wire the oracle imports** — ensure `src/gate.ts`, `src/receipt.ts`, and `src/types.ts` are exported from the package root (add to `package.json` exports and `tsup` entry if needed). No new logic; just ensure the modules are reachable from the test.
-
-- [ ] **Run and confirm PASS:** `cd usabl && npx vitest run tests/oracle/verdicts.test.ts`
-  - Snapshots written on first pass. Commit the snapshot file.
-
-- [ ] **Commit:** `test(oracle): add verified and idle golden-oracle scenarios`
-
----
-
-## Task 3 — Golden oracle: regression and not_covered
-
-**Files:**
-- `usabl/tests/oracle/verdicts.test.ts` (extend)
-
-### Steps
-
-- [ ] **Add regression and not_covered test cases** (append to the existing file):
-
-```ts
-// ---- regression -------------------------------------------------------------
-
-describe('oracle: regression', () => {
-  it('returns regression and exitCode 1 when a new deterministic finding appears vs base', () => {
-    const draft = makeDraft();
-    // Base is clean; current run has a new finding → regression
-    const result = gate({
-      screens: [makeScreenScan([draft])],
-      coverage: makeCoverage(),
-      baseFindings: [],            // base was clean
-      policyHash: 'abc123',
-      runnerVersion: '0.1.0',
-    });
-
-    expect(result.verdict).toBe('regression');
-    expect(result.exitCode).toBe(1);
-    expect(result.receipt).toBeNull();
-
-    const newFindings = result.findings.filter(f => f.status === 'new');
-    expect(newFindings).toHaveLength(1);
-    expect(newFindings[0].ruleId).toBe('pf-modal-focus-return');
-    expect(result).toMatchSnapshot();
-  });
-});
-
-// ---- not_covered ------------------------------------------------------------
-
-describe('oracle: not_covered', () => {
-  it('returns not_covered and exitCode 3 when a capability-denied gap exists', () => {
-    const coverage = makeCoverage({
-      gaps: [
-        {
-          ref: 'clusters',
-          state: 'capability-denied',
-          reason: "provider 'pf-modal-focus-return' requires capability 'live'; static mode denied it",
-        },
-      ],
-    });
-
-    // No screen scans because the live provider was skipped
-    const result = gate({
-      screens: [],
-      coverage,
-      baseFindings: [],
-      policyHash: 'abc123',
-      runnerVersion: '0.1.0',
-    });
-
-    expect(result.verdict).toBe('not_covered');
-    expect(result.exitCode).toBe(3);
-    expect(result.receipt).toBeNull();
-    expect(result.coverage.gaps).toHaveLength(1);
-    expect(result).toMatchSnapshot();
-  });
-});
-```
-
-- [ ] **Run and confirm FAIL:** new test cases not passing yet.
-
-- [ ] **Confirm gate logic handles both cases** (should already be correct from Phase 1; if not, trace and fix the gap in `src/gate.ts` only — do NOT change the contract):
-  - A new `deterministic` finding with no base match → `regression`, exit 1.
-  - At least one `capability-denied` gap → `not_covered`, exit 3.
-
-- [ ] **Run and confirm PASS:** `cd usabl && npx vitest run tests/oracle/verdicts.test.ts`
-
-- [ ] **Commit:** `test(oracle): add regression and not_covered golden-oracle scenarios`
-
----
-
-## Task 4 — Golden oracle: approval_required
-
-**Files:**
-- `usabl/tests/oracle/verdicts.test.ts` (extend)
-
-### Steps
-
-- [ ] **Add approval_required test case:**
-
-```ts
-// ---- approval_required ------------------------------------------------------
-
-describe('oracle: approval_required', () => {
-  it('returns approval_required and exitCode 2 when the policy hash diverged from the stored receipt', () => {
-    const draft = makeDraft();
-
-    // Simulate a stored receipt that was minted against policy hash 'old-hash',
-    // but the current run uses 'new-hash' (policy was edited).
-    const storedReceiptPolicyHash = 'old-hash';
-    const currentPolicyHash = 'new-hash';
-
-    const result = gate({
-      screens: [makeScreenScan([draft])],
-      coverage: makeCoverage(),
-      baseFindings: [draft],         // finding was carried — not a regression by itself
-      policyHash: currentPolicyHash,
-      storedReceiptPolicyHash,       // mismatch triggers approval_required
-      runnerVersion: '0.1.0',
-    });
-
-    expect(result.verdict).toBe('approval_required');
-    expect(result.exitCode).toBe(2);
-    expect(result.receipt).toBeNull();
-    // approval_required is returned regardless of finding status
-    expect(result).toMatchSnapshot();
-  });
-});
-```
-
-- [ ] **Run and confirm FAIL:** `cd usabl && npx vitest run tests/oracle/verdicts.test.ts`
-
-- [ ] **Confirm gate handles storedReceiptPolicyHash mismatch** — the Phase 1 gate already handles policy drift; verify the `gate()` call signature accepts `storedReceiptPolicyHash` as an optional input field. If the field name differs, use the actual field name from `src/gate.ts` and update the test accordingly.
-
-- [ ] **Run and confirm PASS:** `cd usabl && npx vitest run tests/oracle/verdicts.test.ts`
-  - All five scenarios (idle, verified, regression, not_covered, approval_required) now pass.
-
-- [ ] **Commit:** `test(oracle): add approval_required to complete all-verdict golden oracle`
-
----
-
-## Task 5 — Hero-bug flip integration test
-
-**Files:**
-- `usabl/tests/integration/hero-bug-flip.test.ts`
-
-This is an end-to-end integration test that runs the real `run()` orchestrator over the fixture app (via real Playwright), confirms `regression` on the broken state, then switches to the fixed state and confirms `verified` plus receipt re-verification. It uses the real `BrowserDriver` from Phase 2 and requires a running `usabl-app` dev server.
-
-### Steps
-
-- [ ] **Write the failing integration test:**
-
-```ts
-// usabl/tests/integration/hero-bug-flip.test.ts
-// Run with: npx vitest run tests/integration/hero-bug-flip.test.ts
-// Requires: usabl-app dev server at http://localhost:5173 (start with: cd usabl-app && npm run dev)
-
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { chromium, type Browser } from 'playwright';
 import { run } from '../../src/run.js';
-import { makePlaywrightDeps } from '../../src/deps/playwright-deps.js';
-import type { UsablConfig } from '../../src/types.js';
+import { buildRealDeps } from '../../src/deps/build.js';   // Task 4a
+import type { UsablConfig } from '../../src/contracts/index.js';
 
-const BASE_URL = 'http://localhost:5173';
-const TIMEOUT = 30_000;
-
-let browser: Browser;
-
-beforeAll(async () => {
-  browser = await chromium.launch();
-}, TIMEOUT);
-
-afterAll(async () => {
-  await browser.close();
-});
-
+const FIXTURE = 'http://127.0.0.1:5173';
 const config: UsablConfig = {
-  screens: [
-    { id: 'clusters-broken', url: `${BASE_URL}/clusters?variant=broken` },
-    { id: 'clusters-fixed',  url: `${BASE_URL}/clusters?variant=fixed`  },
-  ],
-  policyHash: 'demo-policy-v1',
-  runnerVersion: '0.1.0',
+  appBaseUrl: FIXTURE,
+  uiFileGlobs: ['src/**'],
+  discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: [] },
+  surfaces: [{ id: 'clusters', url: `${FIXTURE}/clusters?variant=fixed`, files: ['src/pages/Clusters.tsx'] }],
+  guardedPaths: ['usabl.config.json'],
 };
 
-describe('hero-bug flip: pf-modal-focus-return', () => {
-  it('broken state produces regression (focus defect is new vs empty base)', async () => {
-    const deps = makePlaywrightDeps(browser);
-    const result = await run(deps, {
-      ...config,
-      screens: [{ id: 'clusters-broken', url: `${BASE_URL}/clusters?variant=broken` }],
-      baseFindings: [],   // fresh run — no prior baseline
-    });
-
-    expect(result.verdict).toBe('regression');
-    expect(result.exitCode).toBe(1);
-
-    const focusFindings = result.findings.filter(f => f.ruleId === 'pf-modal-focus-return');
-    expect(focusFindings.length).toBeGreaterThan(0);
-    expect(focusFindings.every(f => f.status === 'new')).toBe(true);
-  }, TIMEOUT);
-
-  it('fixed state produces verified when broken findings are carried as fixed', async () => {
-    // Establish base from the broken run first
-    const deps = makePlaywrightDeps(browser);
-    const brokenResult = await run(deps, {
-      ...config,
-      screens: [{ id: 'clusters', url: `${BASE_URL}/clusters?variant=broken` }],
-      baseFindings: [],
-    });
-    const baseDrafts = brokenResult.findings.map(f => ({ ...f }));
-
-    // Now run the fixed state against that base
-    const fixedResult = await run(deps, {
-      ...config,
-      screens: [{ id: 'clusters', url: `${BASE_URL}/clusters?variant=fixed` }],
-      baseFindings: baseDrafts,  // base had the broken findings
-    });
-
-    expect(fixedResult.verdict).toBe('verified');
-    expect(fixedResult.exitCode).toBe(0);
-    expect(fixedResult.receipt).not.toBeNull();
-    expect(fixedResult.receipt?.verdict).toBe('verified');
-
-    // pf-modal-focus-return should appear as 'fixed' (was in base, absent in current)
-    const focusFindings = fixedResult.findings.filter(f => f.ruleId === 'pf-modal-focus-return');
-    expect(focusFindings.every(f => f.status === 'fixed')).toBe(true);
-  }, TIMEOUT);
-
-  it('minted receipt re-verifies: re-running with the receipt as base stays verified', async () => {
-    const deps = makePlaywrightDeps(browser);
-
-    // Clean fixed run — no prior base findings (fixture is clean by design)
-    const firstRun = await run(deps, {
-      ...config,
-      screens: [{ id: 'clusters', url: `${BASE_URL}/clusters?variant=fixed` }],
-      baseFindings: [],
-    });
-    expect(firstRun.verdict).toBe('verified');
-    expect(firstRun.receipt).not.toBeNull();
-
-    const receipt = firstRun.receipt!;
-
-    // Second run with same state — receipt should still verify
-    const secondRun = await run(deps, {
-      ...config,
-      screens: [{ id: 'clusters', url: `${BASE_URL}/clusters?variant=fixed` }],
-      baseFindings: firstRun.findings,
-      storedReceiptPolicyHash: receipt.policyHash,
-    });
-
-    expect(secondRun.verdict).toBe('verified');
-    expect(secondRun.receipt).not.toBeNull();
-  }, TIMEOUT);
+describe.runIf(process.env['USABL_INTEGRATION'] === '1')('fixture false-positive oracle', () => {
+  it('the FIXED variant verifies with zero findings through the full provider stack', async () => {
+    const deps = await buildRealDeps({ cwd: '../usabl-app' });
+    try {
+      const result = await run(deps, config, { changedFiles: ['src/pages/Clusters.tsx'] });
+      expect(result.findings.filter((f) => f.status !== 'fixed')).toHaveLength(0);
+      expect(result.coverage.gaps).toHaveLength(0);
+      expect(result.verdict).toBe('verified');
+      expect(result.receipt).not.toBeNull();
+    } finally {
+      await deps.browser.close();
+    }
+  }, 60_000);
 });
 ```
 
-- [ ] **Run and confirm FAIL:** `cd usabl && npx vitest run tests/integration/hero-bug-flip.test.ts`
-  - Expected failures: `makePlaywrightDeps` not yet wired, or dev server not running.
+- [ ] **Step 2: Run against the dev server and drive to green.** Every failure here is
+  a real bug in a rule, the driver, or the fixture. Fix the CODE (or the fixture
+  markup when PF6 genuinely renders an issue), never the assertion. Document each fix
+  in the commit message.
 
-- [ ] **Start the fixture dev server** in a separate terminal:
-
-```bash
-cd usabl-app && npm run dev
-# Must serve at http://localhost:5173
-```
-
-- [ ] **Ensure `makePlaywrightDeps` exists in `src/deps/playwright-deps.ts`** — this is the real `Deps` factory from Phase 2. If the factory function name differs, update the import in the test.
-
-- [ ] **Run and confirm PASS** (all three assertions pass):
-
-```bash
-cd usabl && npx vitest run tests/integration/hero-bug-flip.test.ts
-```
-
-- [ ] **Commit:** `test(integration): hero-bug flip regression->verified and receipt re-verify`
+- [ ] **Step 3: Commit** `test(integration): fixed variant is a zero-finding oracle through the full stack`
 
 ---
 
-## Task 6 — Fleet Insights measurement harness
+## Task 4: Hero-bug flip: regression → fix → verified, receipt re-verifies
+
+**Files:**
+- `usabl/src/deps/real-git.ts`, `usabl/src/deps/real-fs.ts`, `usabl/src/deps/build.ts` (Task 4a)
+- `usabl/test/integration/hero-bug-flip.test.ts`
+
+### Task 4a: Real GitReader/FsGlob and the buildRealDeps assembly
+
+The real BrowserDriver exists (Phase 2). This sub-task completes real `Deps`:
+
+- `real-git.ts` implements the frozen `GitReader` with plumbing, NUL-delimited where
+  output is parsed (§17): `writeTree()` = `git add -A` into a TEMPORARY index file
+  (`GIT_INDEX_FILE`) then `git write-tree` (never touches the user's index);
+  `show(ref, path)` = `git show ref:path` (null on nonzero exit); `statusZ()` =
+  `git status --porcelain -z`; `lsFiles(ref, prefix)` =
+  `git ls-tree -r --name-only ref -- prefix`; `headRef()` = `git rev-parse HEAD`.
+- `real-fs.ts` implements `FsGlob` over `node:fs/promises` + a small glob.
+- `build.ts` exports `buildRealDeps({ cwd, storageStatePath?, staticOnly? })`:
+  assembles clock (`() => new Date().toISOString()` lives HERE, the single real clock),
+  the Phase 2 driver, git, fs, and the CheckRunner with the full provider list
+  (axe, rulepack incl. probes, walk, voicing when contracts exist, intake when
+  requirements exist) and `allowedCapabilities` (`[]` when staticOnly).
+  `runnerVersion` = package version + sha256 prefix over the built engine files;
+  `scannerVersions` read from installed packages, and an unreadable version becomes a
+  `not_covered` gap per §9 (never a guess).
+- Wire `src/cli.ts`'s `buildDeps` stub to this module (removes the Phase 1 throw).
+
+- [ ] **Step 1 (4a): implement and unit-test the pure parts** (glob matching, version
+  string assembly); plumbing itself is exercised by the integration tests below.
+
+### Task 4b: The flip itself
+
+Preconditions: usabl-app repo committed clean (config + EMPTY floor + empty waivers
+committed), dev server running.
+
+- [ ] **Step 2: Write the integration test**
+
+```ts
+// usabl/test/integration/hero-bug-flip.test.ts
+import { describe, it, expect } from 'vitest';
+import { run } from '../../src/run.js';
+import { verifyReceipt } from '../../src/evidence/receipt.js';
+import { buildRealDeps } from '../../src/deps/build.js';
+import type { UsablConfig } from '../../src/contracts/index.js';
+
+const FIXTURE = 'http://127.0.0.1:5173';
+const configFor = (variant: 'broken' | 'fixed'): UsablConfig => ({
+  appBaseUrl: FIXTURE,
+  uiFileGlobs: ['src/**'],
+  discovery: { routerFile: 'src/App.tsx', wideBlastGlobs: [] },
+  surfaces: [{ id: 'clusters', url: `${FIXTURE}/clusters?variant=${variant}`, files: ['src/pages/Clusters.tsx'] }],
+  guardedPaths: ['usabl.config.json'],
+});
+const CHANGED = { changedFiles: ['src/pages/Clusters.tsx'] };
+
+describe.runIf(process.env['USABL_INTEGRATION'] === '1')('hero-bug flip: pf-modal-focus-return', () => {
+  it('broken → regression, fixed → verified with a re-verifiable receipt', async () => {
+    const deps = await buildRealDeps({ cwd: '../usabl-app' });
+    try {
+      // 1. Broken state: the interaction probe catches the missing focus return.
+      //    The committed floor is EMPTY, so the finding is new: regression.
+      const broken = await run(deps, configFor('broken'), CHANGED);
+      expect(broken.verdict).toBe('regression');
+      expect(broken.exitCode).toBe(1);
+      expect(broken.receipt).toBeNull();
+      const heroFindings = broken.findings.filter((f) => f.rule === 'pf-modal-focus-return');
+      expect(heroFindings.length).toBeGreaterThan(0);
+      expect(heroFindings.every((f) => f.status === 'new' && f.confidence === 'fail')).toBe(true);
+
+      // 2. Fixed state: the same probe passes; nothing else fires (Task 3 proved it).
+      const fixed = await run(deps, configFor('fixed'), CHANGED);
+      expect(fixed.verdict).toBe('verified');
+      expect(fixed.exitCode).toBe(0);
+      expect(fixed.receipt).not.toBeNull();
+
+      // 3. The receipt re-verifies against the CURRENT tree with the same hash function.
+      const tree = await deps.git.writeTree();
+      const check = await verifyReceipt(deps, configFor('fixed'), fixed.receipt!, tree);
+      expect(check.valid).toBe(true);
+      expect(check.failedFields).toEqual([]);
+
+      // 4. Oracle preservation: the scan ran with the overlay plugin active in dev,
+      //    and the harness never saw an overlay node (mount guard works).
+      const overlayFindings = fixed.findings.filter((f) => f.elementPath.includes('__usabl'));
+      expect(overlayFindings).toHaveLength(0);
+    } finally {
+      await deps.browser.close();
+    }
+  }, 120_000);
+});
+```
+
+- [ ] **Step 3: Run and drive to green.** The regression assertion failing means the
+  probe or the driver is broken (Phase 2 territory); the verified assertion failing
+  means a false positive survived Task 3. Trace to the responsible phase's code and
+  fix it there.
+
+- [ ] **Step 4: Commit** `test(integration): hero-bug flip through the real engine with receipt re-verification`
+
+---
+
+## Task 5: Verdict oracle check (no duplication)
+
+The five-outcome golden oracle (idle, verified, regression, not_covered,
+approval_required) lives in Phase 1 Task 15 over fakes and stays there: one oracle,
+one owner. This task is a check, not new code:
+
+- [ ] Run `npx vitest run test/golden/oracle.test.ts` in `usabl` and confirm all five
+  scenarios are green on the integrated codebase.
+- [ ] If integration work exposed an outcome the oracle does not pin (it should not),
+  add the scenario to PHASE 1's oracle file with `UPDATE_GOLDEN=1` and eyeball the
+  new golden JSON before committing it.
+
+---
+
+## Task 6: Fleet Insights measurement harness (measurement-only, never gates)
 
 **Files:**
 - `usabl/src/measure/fleet-insights.ts`
-- `usabl/src/measure/fleet-insights.config.ts`
-- `usabl/scripts/measure-fleet-insights.ts` (runnable script, not a test)
+- `usabl/scripts/measure-fleet-insights.ts`
 
-Fleet Insights is a React + Vite + PatternFly SPA behind OpenShift oauth-proxy (RedHat_Internal_SSO). It is client-rendered; scan the rendered DOM, not static HTML. This is measurement-only: no CI, no gating. Coverage and `not_covered` gaps are reported to stdout as JSON.
+Fleet Insights is a client-rendered React + PatternFly SPA behind Red Hat SSO. The
+measurement pass answers ONE question honestly: how much of a real app can the engine
+exercise, and where are the gaps. It mints no verdict and writes no receipt.
 
-### Steps
-
-- [ ] **Write `usabl/src/measure/fleet-insights.config.ts`:**
-
-```ts
-// Measurement-only config for Fleet Insights.
-// storageState is loaded from FLEET_INSIGHTS_STORAGE_STATE env var path — never hardcoded.
-import type { UsablConfig } from '../types.js';
-
-export const FLEET_INSIGHTS_HOST = 'https://fleet-insights.apps.engineering.openshift.org';
-
-// The key screens to measure. Extend as coverage improves.
-export const FLEET_INSIGHTS_SCREENS: UsablConfig['screens'] = [
-  { id: 'fi-overview',   url: `${FLEET_INSIGHTS_HOST}/` },
-  { id: 'fi-clusters',   url: `${FLEET_INSIGHTS_HOST}/clusters` },
-  { id: 'fi-workloads',  url: `${FLEET_INSIGHTS_HOST}/workloads` },
-  { id: 'fi-settings',   url: `${FLEET_INSIGHTS_HOST}/settings` },
-];
-
-// Measurement-only: no policy gating, no receipt, no base findings.
-// The gate is NOT invoked; run() is called in coverage-report-only mode.
-export const FLEET_INSIGHTS_CONFIG: UsablConfig = {
-  screens: FLEET_INSIGHTS_SCREENS,
-  policyHash: 'measurement-only',
-  runnerVersion: '0.1.0',
-  measurementOnly: true,   // signals: run providers, collect gaps, do NOT invoke gate
-};
-```
-
-- [ ] **Write `usabl/src/measure/fleet-insights.ts`:**
+- [ ] **Step 1: Implement `runMeasurementOnly`** over the REAL contracts (no invented
+  config fields; it takes a surface list directly):
 
 ```ts
-// Fleet Insights measurement harness.
-// Usage:
-//   FLEET_INSIGHTS_STORAGE_STATE=/path/to/storageState.json \
-//   npx tsx src/measure/fleet-insights.ts
-//
-// Outputs: JSON report of coverage and not_covered gaps to stdout.
-// Never gates, never writes a receipt.
+// usabl/src/measure/fleet-insights.ts
+import type { CheckRunner, CoverageGap, ScreenScan } from '../contracts/index.js';
 
-import { chromium } from 'playwright';
-import { runMeasurementOnly } from '../run.js';
-import { makePlaywrightDeps } from '../deps/playwright-deps.js';
-import { FLEET_INSIGHTS_CONFIG } from './fleet-insights.config.js';
-import type { Coverage, CoverageGap } from '../types.js';
-
-interface MeasurementReport {
-  host: string;
-  runAt: string;
+export interface MeasurementInput { id: string; url: string; }
+export interface MeasurementReport {
   screensAttempted: number;
-  screensScanned: number;
+  screensWithFindings: number;
+  totalDrafts: number;
   gaps: CoverageGap[];
-  note: string;
+  screens: Array<{ id: string; drafts: number; stops: number; gaps: number }>;
+  note: 'measurement-only: no verdict minted, no receipt written, nothing gated';
 }
 
-async function main(): Promise<void> {
-  const storageStatePath = process.env['FLEET_INSIGHTS_STORAGE_STATE'];
-  if (!storageStatePath) {
-    console.error('Error: set FLEET_INSIGHTS_STORAGE_STATE=/path/to/storageState.json');
-    process.exit(1);
-  }
-
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({ storageState: storageStatePath });
-
-  try {
-    const deps = makePlaywrightDeps(browser, context);
-    const result = await runMeasurementOnly(deps, FLEET_INSIGHTS_CONFIG);
-
-    const report: MeasurementReport = {
-      host: 'fleet-insights.apps.engineering.openshift.org',
-      runAt: new Date().toISOString(),
-      screensAttempted: FLEET_INSIGHTS_CONFIG.screens.length,
-      screensScanned: result.screens.length,
-      gaps: result.coverage.gaps,
-      note: 'measurement-only — no verdict minted, no receipt written',
-    };
-
-    process.stdout.write(JSON.stringify(report, null, 2) + '\n');
-  } finally {
-    await context.close();
-    await browser.close();
-  }
-}
-
-main().catch((err: unknown) => {
-  console.error('Measurement run failed:', err);
-  process.exit(1);
-});
-```
-
-- [ ] **Expose `runMeasurementOnly` from `src/run.ts`** — add a measurement-only export that runs providers and collects coverage gaps but skips the gate entirely:
-
-```ts
-// Addition to src/run.ts (measurement-only path):
+/** Scan each surface via the normal CheckRunner (scan never throws; failures are gaps). */
 export async function runMeasurementOnly(
-  deps: Deps,
-  config: UsablConfig,
-): Promise<Pick<Result, 'screens' | 'coverage'>> {
-  // Opens a Page per screen, runs every provider (respecting capability filtering),
-  // collects ScreenScan[] and Coverage, and returns without invoking the gate.
-  // Any screen that cannot be reached is recorded as a CoverageGap with state 'not-covered'.
-  const screens: ScreenScan[] = [];
-  const gaps: CoverageGap[] = [];
-
-  for (const screen of config.screens) {
-    try {
-      const page = await deps.browser.newPage();
-      await page.goto(screen.url, { waitUntil: 'networkidle', timeout: 15_000 });
-      const scan = await deps.checkRunner.scan(page, screen, config);
-      screens.push(scan);
-      gaps.push(...scan.drafts.flatMap(d => [])); // gaps come from provider capability-denied signals
-      await page.close();
-    } catch (err: unknown) {
-      gaps.push({
-        ref: screen.url,
-        state: 'not-covered',
-        reason: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
+  checkRunner: CheckRunner,
+  surfaces: MeasurementInput[],
+): Promise<MeasurementReport> {
+  const scans: ScreenScan[] = [];
+  for (const s of surfaces) scans.push(await checkRunner.scan(s));
   return {
-    screens,
-    coverage: {
-      changedFiles: [],
-      affected: config.screens.map(s => ({ screenId: s.id, url: s.url, provenance: 'manual' as const })),
-      unresolvedFiles: [],
-      gaps,
-      nothingToCheck: false,
-    },
+    screensAttempted: surfaces.length,
+    screensWithFindings: scans.filter((x) => x.drafts.length > 0).length,
+    totalDrafts: scans.reduce((n, x) => n + x.drafts.length, 0),
+    gaps: scans.flatMap((x) => x.gaps),
+    screens: scans.map((x) => ({ id: x.screenId, drafts: x.drafts.length, stops: x.stops.length, gaps: x.gaps.length })),
+    note: 'measurement-only: no verdict minted, no receipt written, nothing gated',
   };
 }
 ```
 
-- [ ] **Run the measurement harness dry** (confirm it parses and types-check without a live session):
+- [ ] **Step 2: The runnable script** (`scripts/measure-fleet-insights.ts`): reads
+  `FLEET_INSIGHTS_STORAGE_STATE` (exits 1 with instructions when unset), builds real
+  deps with `buildRealDeps({ cwd: '.', storageStatePath })`, defines the surface list
+  (`/`, `/clusters`, `/workloads`, `/settings` on the Fleet Insights host), calls
+  `runMeasurementOnly`, stamps `runAt` (a script may read the clock; the ENGINE may
+  not), and prints the JSON report to stdout. `deps.browser.close()` in a finally.
 
-```bash
-cd usabl && npx tsc --noEmit
-```
+- [ ] **Step 3: Dry check** `npx tsc --noEmit`, then a live run by the operator with a
+  fresh session. The report's gap list plus the verified-verdict-rate math feed the
+  week-2 `not_covered` recalibration decision (ground-truth §25).
 
-- [ ] **Commit:** `feat(measure): Fleet Insights measurement-only harness`
+- [ ] **Step 4: Commit** `feat(measure): Fleet Insights measurement-only harness over the real CheckRunner`
 
 ---
 
-## Task 7 — storageState export and secret-scrub procedure
+## Task 7: storageState export and secret-scrub procedure
 
 **Files:**
 - `usabl/.gitignore` (add storageState patterns)
-- `usabl/src/measure/scrub-storage-state.ts` (secret scrub utility)
+- `usabl/scripts/scrub-storage-state.ts`
 
-### Steps
+Unchanged procedure, restated because it is security-load-bearing:
 
-- [ ] **Add to `usabl/.gitignore`:**
+- [ ] `.gitignore` additions:
 
 ```gitignore
-# Fleet Insights session — never commit
+# Fleet Insights session: never commit, scrubbed or not
 storageState*.json
 **/storageState*.json
 fleet-insights-session/
 ```
 
-- [ ] **Write `usabl/src/measure/scrub-storage-state.ts`** (run once after exporting from Playwright):
+- [ ] `scripts/scrub-storage-state.ts`: reads a Playwright storageState JSON, replaces
+  every cookie value matching `/^[A-Za-z0-9_-]{20,}$/` with `[SCRUBBED:<name>]`,
+  writes the review copy, prints counts. Even the scrubbed file stays out of git.
 
-```ts
-// Scrubs a Playwright storageState JSON to remove values that look like secrets
-// (tokens, session cookies with long random values) while keeping structure.
-// Run: npx tsx src/measure/scrub-storage-state.ts <input.json> <output-for-review.json>
-//
-// IMPORTANT: even the scrubbed file must not be committed. Use .gitignore.
+- [ ] One-time export procedure (comment block at the top of the script):
+  `npx playwright open --save-storage=/tmp/fleet-insights-session.json <host>`,
+  complete SSO + MFA, visit the four surfaces, close; scrub for review; export
+  `FLEET_INSIGHTS_STORAGE_STATE=/tmp/fleet-insights-session.json`; sessions expire
+  with SSO cookie rotation (8-24 h), re-export on 401/302.
 
-import { readFileSync, writeFileSync } from 'node:fs';
+- [ ] Verify the ignore: `echo '{}' > storageState-test.json && git check-ignore -v storageState-test.json && rm storageState-test.json`
 
-interface Cookie {
-  name: string;
-  value: string;
-  [key: string]: unknown;
-}
-interface StorageState {
-  cookies: Cookie[];
-  origins: unknown[];
-}
-
-const TOKEN_PATTERN = /^[A-Za-z0-9_\-]{20,}$/;
-
-function scrub(state: StorageState): StorageState {
-  return {
-    ...state,
-    cookies: state.cookies.map(c => ({
-      ...c,
-      value: TOKEN_PATTERN.test(c.value) ? `[SCRUBBED:${c.name}]` : c.value,
-    })),
-  };
-}
-
-const [, , inputPath, outputPath] = process.argv;
-if (!inputPath || !outputPath) {
-  console.error('Usage: scrub-storage-state <input.json> <output-for-review.json>');
-  process.exit(1);
-}
-
-const raw = JSON.parse(readFileSync(inputPath, 'utf-8')) as StorageState;
-const scrubbed = scrub(raw);
-writeFileSync(outputPath, JSON.stringify(scrubbed, null, 2) + '\n');
-console.log(`Scrubbed ${raw.cookies.length} cookies → ${scrubbed.cookies.filter(c => String(c.value).startsWith('[SCRUBBED')).length} redacted.`);
-console.log('Review the output file. If it looks safe for reference only, keep it out of git.');
-```
-
-- [ ] **Write the one-time session export procedure** (in a comment block at the top of `fleet-insights.ts` — not a separate file):
-
-```
-// ONE-TIME SESSION EXPORT:
-//
-// 1. Open Chromium: npx playwright open --save-storage=/tmp/fleet-insights-session.json \
-//      https://fleet-insights.apps.engineering.openshift.org
-//
-// 2. Complete the Red Hat SSO + MFA login in the opened browser window.
-//    Navigate to at least: /, /clusters, /workloads, /settings.
-//
-// 3. Close the browser. Playwright writes the full storageState to /tmp/fleet-insights-session.json.
-//
-// 4. Scrub: npx tsx src/measure/scrub-storage-state.ts \
-//      /tmp/fleet-insights-session.json /tmp/scrubbed-for-review.json
-//    Review the scrub output. Do NOT commit either file.
-//
-// 5. Set env var for the measurement run:
-//    export FLEET_INSIGHTS_STORAGE_STATE=/tmp/fleet-insights-session.json
-//    npx tsx src/measure/fleet-insights.ts
-//
-// Sessions expire when the corp SSO cookie rotates (usually 8–24 h). Re-export when you see 401/302.
-```
-
-- [ ] **Run and confirm .gitignore works:**
-
-```bash
-cd usabl && echo '{}' > storageState-test.json && git status
-# Must show storageState-test.json as ignored (not tracked)
-git check-ignore -v storageState-test.json
-rm storageState-test.json
-```
-
-- [ ] **Commit:** `chore: gitignore storageState and add scrub utility for Fleet Insights session`
-
----
-
-## Task 8 — Fixture app variant routing and smoke check
-
-**Files:**
-- `usabl-app/src/App.tsx` (ensure `?variant=` is threaded through to ClustersPage)
-- `usabl-app/src/App.test.tsx`
-
-### Steps
-
-- [ ] **Write the smoke test:**
-
-```tsx
-// usabl-app/src/App.test.tsx
-import { render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
-import App from './App.js';
-
-it('broken variant renders Clusters page with the demo modal button', () => {
-  Object.defineProperty(window, 'location', {
-    writable: true,
-    value: { search: '?variant=broken', pathname: '/clusters' },
-  });
-  render(
-    <MemoryRouter initialEntries={['/clusters?variant=broken']}>
-      <App />
-    </MemoryRouter>
-  );
-  expect(screen.getByRole('button', { name: /view cluster details/i })).toBeInTheDocument();
-});
-
-it('fixed variant renders Clusters page with the demo modal button', () => {
-  Object.defineProperty(window, 'location', {
-    writable: true,
-    value: { search: '?variant=fixed', pathname: '/clusters' },
-  });
-  render(
-    <MemoryRouter initialEntries={['/clusters?variant=fixed']}>
-      <App />
-    </MemoryRouter>
-  );
-  expect(screen.getByRole('button', { name: /view cluster details/i })).toBeInTheDocument();
-});
-```
-
-- [ ] **Run and confirm FAIL:** `cd usabl-app && npx vitest run src/App.test.tsx`
-
-- [ ] **Update `usabl-app/src/App.tsx`** to ensure `/clusters` route renders `ClustersPage` and the `?variant=` param is read by `readVariant()` at the page level (not the router level). The router does not need to know about the variant; `readVariant()` reads it from `window.location.search` directly.
-
-- [ ] **Run and confirm PASS:** `cd usabl-app && npx vitest run src/App.test.tsx`
-
-- [ ] **Commit:** `test(usabl-app): smoke check for variant routing on Clusters page`
-
----
-
-## Task 9 — Full oracle pass: all five scenarios in one run
-
-**Files:**
-- `usabl/tests/oracle/verdicts.test.ts` (no new code; validate the final state)
-
-This task is validation only. Run the complete oracle suite and confirm all five scenarios produce snapshot-stable JSON.
-
-### Steps
-
-- [ ] **Run the full oracle suite:**
-
-```bash
-cd usabl && npx vitest run tests/oracle/verdicts.test.ts --reporter=verbose
-```
-
-Expected output:
-```
-✓ oracle: idle (nothingToCheck) > returns verdict null and exitCode 0
-✓ oracle: verified > mints a receipt when all deterministic findings are carried
-✓ oracle: regression > returns regression and exitCode 1 when a new deterministic finding appears
-✓ oracle: not_covered > returns not_covered and exitCode 3 when a capability-denied gap exists
-✓ oracle: approval_required > returns approval_required and exitCode 2 when the policy hash diverged
-```
-
-- [ ] **If any snapshot is unstable** (different JSON on re-run with same inputs), trace the nondeterminism to the gate or receipt code. The canonical `Result` must be a pure function of its inputs. Common causes: `Date.now()` in `mintedAt` (acceptable if it is inside Receipt only, not in the finding identity hash), non-stable sort of `findings[]`. Fix the sort or mock time in the snapshot test.
-
-- [ ] **Update snapshots only if the change is intentional:**
-
-```bash
-cd usabl && npx vitest run tests/oracle/verdicts.test.ts --update-snapshots
-```
-
-- [ ] **Commit:** `test(oracle): validate all five verdicts snapshot-stable — final oracle pass`
+- [ ] Commit `chore: gitignore storageState and add scrub utility`
 
 ---
 
 ## Self-Review
 
-**Hero-bug flip coverage:**
-- Task 1 encodes `pf-modal-focus-return` as the structural hero defect in `DemoModal.tsx`. The broken variant deliberately omits the `triggerEl.focus()` call on close. The fixed variant restores it. Both states are reachable via `?variant=broken|fixed` without any build or base-ref rebuild.
-- Task 5 drives the full `regression → verified` verdict flip through the real `run()` orchestrator and a real browser. The third integration test confirms the minted receipt re-verifies on a repeat run with the same code state.
+**Contract fidelity:** every import in this phase resolves against `usabl`'s frozen
+`src/contracts/index.ts`. No `src/types.js`, no `gate({ baseFindings })`, no
+`Draft.ruleId`, no `UsablConfig.screens/measurementOnly`. The ratchet in the flip test
+is the committed evidence floor, not a passed-in baseline.
 
-**All four verdicts plus idle in the oracle (Task 2–4, 9):**
-| Verdict | Scenario | Key input condition |
-|---------|----------|---------------------|
-| `idle` | `nothingToCheck: true`, `affected: []` | No UI-touching files changed |
-| `verified` | Draft carried in base, no gaps, policy hash stable | Gate mints receipt, exit 0 |
-| `regression` | New deterministic draft vs empty base | Gate sees `status: 'new'`, exit 1 |
-| `not_covered` | `capability-denied` gap in `coverage.gaps` | Provider skipped in static mode, exit 3 |
-| `approval_required` | `storedReceiptPolicyHash !== policyHash` | Policy drift detected, exit 2 |
+**Hero bug detectability:** the trigger carries `aria-haspopup="dialog"`, the Phase 2
+probe clicks it, Escapes, and asserts `activeElementIs(trigger)`. Broken variant fails
+that predicate; fixed variant passes. The chain from planted defect to `regression` to
+`verified` runs through the real driver, the real gate, and the real floor.
 
-**Fleet Insights measurement-only pass (Tasks 6–7):**
-- `runMeasurementOnly` skips the gate entirely; no verdict minted, no receipt written.
-- Session via `storageState` loaded from env var; never hardcoded, never committed.
-- `.gitignore` covers all `storageState*.json` patterns. The scrub utility redacts long random cookie values before any human review.
-- The measurement run is not wired to CI. It is a manual operator step.
+**False-positive oracle:** Task 3 proves clean-equals-zero-findings through the FULL
+stack before the flip is attempted, with Settings as the untouched control. Failures
+there are code bugs by definition and get fixed at the responsible phase.
 
-**Placeholder scan:** No "TBD", "TODO", or undefined types remain in the task code blocks. All types reference the frozen contracts from `01-core-foundation.md` Task 2 verbatim (`Result`, `Receipt`, `Coverage`, `CoverageGap`, `Finding`, `Draft`, `ScreenScan`, `Deps`, `UsablConfig`, `Verdict`). The `measurementOnly` field on `UsablConfig` is additive and must be confirmed against the Phase 1 type definition; if it is not present, add it as an optional boolean (no other contract field changes).
+**Real deps completed:** Task 4a is the single home for real git plumbing
+(NUL-delimited parsing, temporary-index write-tree) and the `buildRealDeps` assembly;
+the CLI's Phase 1 stub is retired here.
 
-**Type consistency with frozen contracts:**
-- `Receipt.verdict` is typed as the literal `'verified'` — the oracle confirms receipt is `null` for all non-verified verdicts.
-- `Result.verdict` is `Verdict | null`; null is only emitted on `nothingToCheck`.
-- `CoverageGap.state` uses the union `'unresolved' | 'not-covered' | 'skipped' | 'capability-denied'`; the oracle uses `'capability-denied'` for the static-mode scenario.
-- `Finding.status` uses `'new' | 'carried' | 'fixed' | 'waived'`; all four values appear across the oracle scenarios.
+**Measurement honesty:** `runMeasurementOnly` never touches the gate, mints nothing,
+and reports gaps verbatim from `ScreenScan.gaps`. The script owns the wall clock;
+the engine never does.
+
+**Secrets:** storageState flows only through an env var into the driver; gitignore
+plus scrub utility plus expiry note; nothing session-shaped is ever committed.
+
+**Repo hygiene:** `usabl-dev/usabl-app` remote creation is an operator step; the agent
+scaffolds locally and stops.
