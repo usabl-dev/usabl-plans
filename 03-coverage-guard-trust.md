@@ -4,142 +4,146 @@
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task.
 > Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Wire Coverage.gaps from empty to populated and consumed; add the git-anchored
-guard (config-guards-itself + session pinning); bind the three-hash receipt; and close
-the evidence floor + waivers accept loop so that a policy edit forces `approval_required`
-and an accept commit converges the next run to `verified`.
+**Goal:** Populate `Coverage` from real discovery (route manifest + import graph +
+wide-blast + manual surfaces); harden the guard (config file unconditionally
+self-guarded, directory guarded paths expanded to files, session-pin helpers); bind and
+re-verify the receipt through the single `computePolicyHash`; implement the trusted-ref
+read path so CI judges a PR against the base ref's policy; and close the evidence floor
+accept loop so a policy edit forces `approval_required` and an accept commit converges
+the next run to `verified`.
 
 **Architecture:**
-- One pure `run(deps, config)`. All I/O through injected `Deps`. No hidden reads.
-- The gate remains the single verdict authority. This phase feeds the existing gate
-  (via `Coverage.gaps` and `guardDivergedPaths`) and does not re-implement it.
-- `verified` and the receipt are reserved for reproducible evidence. A surface that cannot
-  be exercised is `not_covered`, never a silent pass.
-- Three-hash receipt stays split: `sourceTree`, `policyHash`, `runnerVersion` are
-  separate fields. Never collapsed.
-- Ambiguous coverage resolves to `approval_required`, never a warning.
-- One injected exclude/scope list on `Deps.fs.glob` patterns. Config controls threshold.
-- Config-guards-itself: config file integrity checked before trusting its contents.
-- `schemaVersion: 'usabl.result.v1'` on every `Result` and projection.
+- `run(deps, config, opts?)` keeps the frozen Phase 1 signature. This phase swaps the
+  internals (planner instead of the direct-mapping stub, hardened guard, expanded
+  guarded set for the receipt); it never changes the public API.
+- The gate remains the single verdict authority. This phase feeds it
+  (`coverage.gaps`, `guardDivergedPaths`) and does not re-implement it.
+- The config file is UNCONDITIONALLY self-guarded and checked FIRST. A config that
+  edits itself out of its own `guardedPaths` is still caught, because the guard never
+  trusts the working-tree config's contents before verifying the config file against
+  HEAD. Ordering is load-bearing.
+- Directory guarded paths expand to files: the union of committed files under the
+  prefix (`git.lsFiles`) and working-tree files under it (`fs.glob`). Editing
+  `src/gate/anything.ts` diverges the guard. The engine cannot be silently self-edited.
+- ONE policy hash: `computePolicyHash` from Phase 1 (`evidence/receipt.ts`), computed
+  over the EXPANDED guarded set. `mintReceipt` and `verifyReceipt` use the same
+  function with the same inputs. No second algorithm.
+- `opts.trustedRef` (CI): floor and waivers are read from the trusted ref via
+  `git.show(ref, path)` (already wired in Phase 1's `readPolicyJson`). A PR cannot
+  influence the policy it is judged against.
+- The evidence floor accepts only `confidence: 'fail'` findings. Unverified findings
+  cannot be accepted; the surface stays `not_covered` until they are resolved.
+- Ambiguous coverage resolves to honest gaps (`not_covered`), never a warning.
 
-**Tech Stack:** TypeScript (ESM, strict), Node 22, Vitest (in-memory fakes only in unit
-tests), tsup. No real git, no real filesystem in unit tests.
+**Tech Stack:** TypeScript (ESM, strict), Node 22, Vitest (fakes only in unit tests;
+`makeFakeDeps` from Phase 1, never hand-rolled `Deps`), tsup.
 
 ---
 
-## Task 1 — Route manifest loader and import-graph builder
+## Task 1: Route manifest loader and import-graph builder
 
 **Files:**
 - `src/coverage/route-manifest.ts`
 - `src/coverage/import-graph.ts`
-- `tests/coverage/route-manifest.test.ts`
-- `tests/coverage/import-graph.test.ts`
+- `test/coverage/route-manifest.test.ts`
+- `test/coverage/import-graph.test.ts`
 
-The route manifest maps `screenId → { url, entryFile }`. Phase 3 reads it from a JSON
-sidecar (`usabl.routes.json`) or, if not present, extracts it from the router source
-file via a simple regex that recognises `path: '/foo'` lines (React Router v6 pattern).
-The import graph is a BFS over static `import` statements using a regex extractor.
-Bundler aliases that cannot be resolved stay in `unresolvedFiles` — honest `not_covered`,
-never a silent pass.
+The route manifest maps `screenId → { url, entryFile }`. The JSON sidecar
+(`usabl.routes.json`) is the real mechanism: it attributes an entry file per route so
+the import graph can map a changed file to specific screens. The regex fallback (React
+Router `path="..."` extraction) recovers route ids and URLs but CANNOT attribute entry
+files; such routes carry `entryFile: null`, are reachable through wide-blast and manual
+surfaces, and file-level attribution honestly does not exist for them. Bundler aliases
+that cannot be resolved stay unresolvable. No silent passes.
 
 - [ ] **Step 1: Write failing tests**
 
 ```ts
-// tests/coverage/route-manifest.test.ts
+// test/coverage/route-manifest.test.ts
 import { describe, it, expect } from 'vitest';
 import { parseRouteManifest } from '../../src/coverage/route-manifest.js';
-import type { FsGlob } from '../../src/contracts/index.js';
+import { makeFakeDeps } from '../../src/deps/fakes.js';
 
-function fakeFs(files: Record<string, string>): FsGlob {
-  return {
-    readFile: async (p) => files[p] ?? null,
-    glob: async (pats) => Object.keys(files).filter((f) => pats.some((p) => f.endsWith(p.replace(/\*\*/g, '').replace(/\*/g, '')))),
-  };
-}
+const fsOf = (files: Record<string, string>) => makeFakeDeps({ files }).fs;
 
 describe('parseRouteManifest', () => {
   it('loads a JSON sidecar when present', async () => {
-    const fs = fakeFs({
+    const fs = fsOf({
       'usabl.routes.json': JSON.stringify({
         routes: [{ screenId: 'clusters', url: '/clusters', entryFile: 'src/ClustersPage.tsx' }],
       }),
     });
     const manifest = await parseRouteManifest(fs, { routerFile: 'src/router.tsx', wideBlastGlobs: [] });
     expect(manifest.routes).toHaveLength(1);
-    expect(manifest.routes[0].screenId).toBe('clusters');
+    expect(manifest.routes[0]!.screenId).toBe('clusters');
+    expect(manifest.routes[0]!.entryFile).toBe('src/ClustersPage.tsx');
   });
 
-  it('falls back to regex extraction from router source', async () => {
-    const fs = fakeFs({
+  it('falls back to regex extraction with entryFile null (no attribution invented)', async () => {
+    const fs = fsOf({
       'src/router.tsx': `
         <Route path="/alerts" element={<AlertsPage />} />
         <Route path="/hosts"  element={<HostsPage />} />
       `,
     });
     const manifest = await parseRouteManifest(fs, { routerFile: 'src/router.tsx', wideBlastGlobs: [] });
-    const ids = manifest.routes.map((r) => r.screenId).sort();
-    expect(ids).toEqual(['alerts', 'hosts'].sort());
+    expect(manifest.routes.map((r) => r.screenId).sort()).toEqual(['alerts', 'hosts']);
+    expect(manifest.routes.every((r) => r.entryFile === null)).toBe(true);
   });
 
   it('returns an empty manifest when neither source exists', async () => {
-    const fs = fakeFs({});
-    const manifest = await parseRouteManifest(fs, { routerFile: 'src/router.tsx', wideBlastGlobs: [] });
+    const manifest = await parseRouteManifest(fsOf({}), { routerFile: 'src/router.tsx', wideBlastGlobs: [] });
     expect(manifest.routes).toHaveLength(0);
   });
 });
 ```
 
 ```ts
-// tests/coverage/import-graph.test.ts
+// test/coverage/import-graph.test.ts
 import { describe, it, expect } from 'vitest';
 import { buildImportGraph } from '../../src/coverage/import-graph.js';
-import type { FsGlob } from '../../src/contracts/index.js';
+import { makeFakeDeps } from '../../src/deps/fakes.js';
 
-function fakeFs(files: Record<string, string>): FsGlob {
-  return {
-    readFile: async (p) => files[p] ?? null,
-    glob: async () => [],
-  };
-}
+const fsOf = (files: Record<string, string>) => makeFakeDeps({ files }).fs;
 
 describe('buildImportGraph', () => {
-  it('resolves a direct relative import', async () => {
-    const fs = fakeFs({
+  it('resolves a relative import by probing real extensions (.ts wins when .tsx absent)', async () => {
+    const fs = fsOf({
       'src/ClustersPage.tsx': `import { ClusterTable } from './ClusterTable';`,
-      'src/ClusterTable.tsx': `export const ClusterTable = () => null;`,
+      'src/ClusterTable.ts': `export const ClusterTable = 1;`,
     });
-    const graph = await buildImportGraph(fs, ['src/ClustersPage.tsx'], 'src');
-    expect(graph.get('src/ClustersPage.tsx')).toContain('src/ClusterTable.tsx');
+    const graph = await buildImportGraph(fs, ['src/ClustersPage.tsx']);
+    expect(graph.get('src/ClustersPage.tsx')).toContain('src/ClusterTable.ts');
   });
 
   it('records an alias import as unresolvable', async () => {
-    const fs = fakeFs({
-      'src/Page.tsx': `import { Foo } from '@/components/Foo';`,
-    });
-    const graph = await buildImportGraph(fs, ['src/Page.tsx'], 'src');
-    const unresolved = graph.unresolvable;
-    expect(unresolved.some((u) => u.includes('@/components/Foo'))).toBe(true);
+    const fs = fsOf({ 'src/Page.tsx': `import { Foo } from '@/components/Foo';` });
+    const graph = await buildImportGraph(fs, ['src/Page.tsx']);
+    expect(graph.unresolvable.some((u) => u.includes('@/components/Foo'))).toBe(true);
+  });
+
+  it('records a relative import with no existing candidate file as unresolvable', async () => {
+    const fs = fsOf({ 'src/Page.tsx': `import { Gone } from './Gone';` });
+    const graph = await buildImportGraph(fs, ['src/Page.tsx']);
+    expect(graph.unresolvable.some((u) => u.includes('./Gone'))).toBe(true);
   });
 
   it('terminates BFS on cycles', async () => {
-    const fs = fakeFs({
+    const fs = fsOf({
       'src/A.tsx': `import { B } from './B';`,
       'src/B.tsx': `import { A } from './A';`,
     });
-    const graph = await buildImportGraph(fs, ['src/A.tsx'], 'src');
+    const graph = await buildImportGraph(fs, ['src/A.tsx']);
     expect(graph.get('src/A.tsx')).toContain('src/B.tsx');
-    // no infinite loop
   });
 });
 ```
 
-- [ ] **Step 2: Run tests — expected FAIL**
+- [ ] **Step 2: Run: expected FAIL**
 
 ```bash
-npx vitest run tests/coverage/route-manifest.test.ts tests/coverage/import-graph.test.ts
+npx vitest run test/coverage/route-manifest.test.ts test/coverage/import-graph.test.ts
 ```
-
-Expected: FAIL — cannot find modules.
 
 - [ ] **Step 3: Write implementation**
 
@@ -147,7 +151,7 @@ Expected: FAIL — cannot find modules.
 // src/coverage/route-manifest.ts
 import type { FsGlob } from '../contracts/index.js';
 
-export interface RouteEntry { screenId: string; url: string; entryFile: string; }
+export interface RouteEntry { screenId: string; url: string; entryFile: string | null; }
 export interface RouteManifest { routes: RouteEntry[]; }
 
 function urlToScreenId(url: string): string {
@@ -159,17 +163,18 @@ export async function parseRouteManifest(
   discovery: { routerFile: string; wideBlastGlobs: string[] },
 ): Promise<RouteManifest> {
   const sidecar = await fs.readFile('usabl.routes.json');
-  if (sidecar != null) {
-    return JSON.parse(sidecar) as RouteManifest;
-  }
+  if (sidecar != null) return JSON.parse(sidecar) as RouteManifest;
+
   const source = await fs.readFile(discovery.routerFile);
   if (source == null) return { routes: [] };
+  // Regex fallback recovers route ids and URLs only. It cannot attribute entry
+  // files, so entryFile is null and file-level mapping honestly does not exist
+  // for these routes (wide-blast and manual surfaces still cover them).
   const re = /path=["'`](\/[^"'`]*)["'`]/g;
   const routes: RouteEntry[] = [];
   let m: RegExpExecArray | null;
   while ((m = re.exec(source)) !== null) {
-    const url = m[1];
-    routes.push({ screenId: urlToScreenId(url), url, entryFile: discovery.routerFile });
+    routes.push({ screenId: urlToScreenId(m[1]!), url: m[1]!, entryFile: null });
   }
   return { routes };
 }
@@ -193,29 +198,24 @@ function extractSpecifiers(source: string): string[] {
   for (const re of [STATIC_IMPORT, DYNAMIC_IMPORT]) {
     re.lastIndex = 0;
     let m: RegExpExecArray | null;
-    while ((m = re.exec(source)) !== null) specs.push(m[1]);
+    while ((m = re.exec(source)) !== null) specs.push(m[1]!);
   }
   return specs;
 }
 
-function resolveSpecifier(base: string, spec: string, rootDir: string): string | null {
-  if (!spec.startsWith('.')) return null; // alias or bare — unresolvable
-  const dir = nodePath.dirname(base);
-  const resolved = nodePath.normalize(nodePath.join(dir, spec));
-  // try common extensions
-  if (resolved.match(/\.[a-z]+$/i)) return resolved;
-  for (const ext of ['.tsx', '.ts', '.jsx', '.js']) {
-    const candidate = resolved + ext;
-    if (candidate.startsWith(rootDir)) return candidate;
+/** Resolve a relative specifier by probing which candidate file actually exists. */
+async function resolveSpecifier(fs: FsGlob, base: string, spec: string): Promise<string | null> {
+  if (!spec.startsWith('.')) return null; // alias or bare specifier: not resolvable here
+  const resolved = nodePath.normalize(nodePath.join(nodePath.dirname(base), spec));
+  if (/\.[a-z]+$/i.test(resolved)) return (await fs.readFile(resolved)) !== null ? resolved : null;
+  for (const suffix of ['.tsx', '.ts', '.jsx', '.js', '/index.tsx', '/index.ts']) {
+    const candidate = resolved + suffix;
+    if ((await fs.readFile(candidate)) !== null) return candidate;
   }
-  return resolved + '.tsx'; // best guess
+  return null; // no candidate exists: unresolvable, never a guess
 }
 
-export async function buildImportGraph(
-  fs: FsGlob,
-  entryFiles: string[],
-  rootDir: string,
-): Promise<ImportGraph> {
+export async function buildImportGraph(fs: FsGlob, entryFiles: string[]): Promise<ImportGraph> {
   const edges = new Map<string, string[]>();
   const unresolvable: string[] = [];
   const queue = [...entryFiles];
@@ -225,72 +225,51 @@ export async function buildImportGraph(
     const file = queue.shift()!;
     const source = await fs.readFile(file);
     if (source == null) continue;
-    const specs = extractSpecifiers(source);
     const children: string[] = [];
-    for (const spec of specs) {
-      const resolved = resolveSpecifier(file, spec, rootDir);
-      if (resolved == null) { unresolvable.push(`${file}:${spec}`); continue; }
+    for (const spec of extractSpecifiers(source)) {
+      const resolved = await resolveSpecifier(fs, file, spec);
+      if (resolved == null) {
+        if (spec.startsWith('.') || spec.startsWith('@/') || spec.startsWith('~/')) {
+          unresolvable.push(`${file}:${spec}`);
+        }
+        continue; // bare package imports are not app surfaces
+      }
       children.push(resolved);
       if (!visited.has(resolved)) { visited.add(resolved); queue.push(resolved); }
     }
     edges.set(file, children);
   }
 
-  return {
-    get: (file) => edges.get(file) ?? [],
-    unresolvable,
-  };
+  return { get: (file) => edges.get(file) ?? [], unresolvable };
 }
 ```
 
-- [ ] **Step 4: Run tests — expected PASS**
-
-```bash
-npx vitest run tests/coverage/route-manifest.test.ts tests/coverage/import-graph.test.ts && npm run typecheck
-```
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/coverage/route-manifest.ts src/coverage/import-graph.ts \
-        tests/coverage/route-manifest.test.ts tests/coverage/import-graph.test.ts
-git commit -m "feat: route manifest loader and static import-graph builder"
-```
+- [ ] **Step 4: Run: expected PASS**, then `npm run typecheck`.
+- [ ] **Step 5: Commit** `feat: route manifest loader and existence-probing import graph`
 
 ---
 
-## Task 2 — Coverage planner: changed files → affected screens, gaps populated
+## Task 2: Coverage planner: changed files → affected screens, gaps populated
 
 **Files:**
 - `src/coverage/planner.ts`
-- `tests/coverage/planner.test.ts`
+- `test/coverage/planner.test.ts`
 
-The planner is the only place that calls the route manifest and import graph. It produces
-a fully-populated `Coverage` including `gaps` for every unresolved file and every screen
-whose import graph could not be established. Phase 1 left `gaps: []`; this task populates
-and owns that field.
+The planner is the only caller of the route manifest and import graph. It produces a
+fully-populated `Coverage`, including a `CoverageGap` with a written reason for every
+UI file it cannot map. Only routes with a non-null `entryFile` participate in
+route-graph matching.
 
 - [ ] **Step 1: Write failing test**
 
 ```ts
-// tests/coverage/planner.test.ts
+// test/coverage/planner.test.ts
 import { describe, it, expect } from 'vitest';
 import { computeCoverage } from '../../src/coverage/planner.js';
-import type { FsGlob, UsablConfig } from '../../src/contracts/index.js';
+import { makeFakeDeps } from '../../src/deps/fakes.js';
+import type { UsablConfig } from '../../src/contracts/index.js';
 
-function fakeFs(files: Record<string, string>): FsGlob {
-  return {
-    readFile: async (p) => files[p] ?? null,
-    glob: async (pats) => {
-      return Object.keys(files).filter((f) =>
-        pats.some((p) => {
-          const re = new RegExp('^' + p.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*') + '$');
-          return re.test(f);
-        })
-      );
-    },
-  };
-}
+const fsOf = (files: Record<string, string>) => makeFakeDeps({ files }).fs;
 
 const baseConfig: UsablConfig = {
   appBaseUrl: 'http://localhost:3000',
@@ -302,15 +281,13 @@ const baseConfig: UsablConfig = {
 
 describe('computeCoverage', () => {
   it('returns nothingToCheck when no UI files changed', async () => {
-    const fs = fakeFs({ 'src/router.tsx': '' });
-    const cov = await computeCoverage(fs, baseConfig, ['docs/README.md']);
+    const cov = await computeCoverage(fsOf({ 'src/router.tsx': '' }), baseConfig, ['docs/README.md']);
     expect(cov.nothingToCheck).toBe(true);
-    expect(cov.verdict).toBeUndefined(); // not a verdict field — just nothingToCheck
     expect(cov.gaps).toHaveLength(0);
   });
 
-  it('maps a changed UI file to an affected screen via route manifest', async () => {
-    const fs = fakeFs({
+  it('maps a changed UI file to an affected screen via the sidecar route manifest', async () => {
+    const fs = fsOf({
       'usabl.routes.json': JSON.stringify({
         routes: [{ screenId: 'clusters', url: '/clusters', entryFile: 'src/ClustersPage.tsx' }],
       }),
@@ -318,60 +295,54 @@ describe('computeCoverage', () => {
     });
     const cov = await computeCoverage(fs, baseConfig, ['src/ClustersPage.tsx']);
     expect(cov.nothingToCheck).toBe(false);
-    expect(cov.affected.some((s) => s.screenId === 'clusters')).toBe(true);
+    expect(cov.affected.some((s) => s.screenId === 'clusters' && s.provenance === 'route-graph')).toBe(true);
     expect(cov.unresolvedFiles).toHaveLength(0);
     expect(cov.gaps).toHaveLength(0);
   });
 
-  it('populates a gap for a UI file that maps to no screen', async () => {
-    const fs = fakeFs({
+  it('populates a gap with a reason for a UI file that maps to no screen', async () => {
+    const fs = fsOf({
       'usabl.routes.json': JSON.stringify({ routes: [] }),
       'src/Orphan.tsx': `export default function Orphan() {}`,
     });
     const cov = await computeCoverage(fs, baseConfig, ['src/Orphan.tsx']);
-    expect(cov.nothingToCheck).toBe(false);
     expect(cov.unresolvedFiles).toContain('src/Orphan.tsx');
-    expect(cov.gaps.length).toBeGreaterThan(0);
-    expect(cov.gaps[0].reason).not.toBe('');
-    expect(cov.gaps[0].state).toBe('unresolved');
+    expect(cov.gaps).toHaveLength(1);
+    expect(cov.gaps[0]!.state).toBe('unresolved');
+    expect(cov.gaps[0]!.reason).not.toBe('');
   });
 
-  it('wide-blast: a changed global file touches every screen', async () => {
-    const fs = fakeFs({
+  it('wide-blast: a changed global file touches every known route', async () => {
+    const fs = fsOf({
       'usabl.routes.json': JSON.stringify({
         routes: [
           { screenId: 'clusters', url: '/clusters', entryFile: 'src/ClustersPage.tsx' },
-          { screenId: 'alerts', url: '/alerts', entryFile: 'src/AlertsPage.tsx' },
+          { screenId: 'alerts', url: '/alerts', entryFile: null },
         ],
       }),
       'src/App.tsx': `export default function App() {}`,
     });
     const cov = await computeCoverage(fs, baseConfig, ['src/App.tsx']);
-    expect(cov.affected.length).toBe(2);
+    expect(cov.affected).toHaveLength(2);
     expect(cov.affected.every((s) => s.provenance === 'wide-blast')).toBe(true);
   });
 
-  it('manual surface config acts as additive fallback', async () => {
+  it('manual surface config is an additive fallback', async () => {
     const cfg: UsablConfig = {
       ...baseConfig,
       surfaces: [{ id: 'login', url: '/login', files: ['src/LoginPage.tsx'] }],
     };
-    const fs = fakeFs({
+    const fs = fsOf({
       'usabl.routes.json': JSON.stringify({ routes: [] }),
       'src/LoginPage.tsx': `export default function LoginPage() {}`,
     });
     const cov = await computeCoverage(fs, cfg, ['src/LoginPage.tsx']);
-    expect(cov.affected.some((s) => s.screenId === 'login')).toBe(true);
-    expect(cov.affected[0].provenance).toBe('manual');
+    expect(cov.affected.some((s) => s.screenId === 'login' && s.provenance === 'manual')).toBe(true);
   });
 });
 ```
 
-- [ ] **Step 2: Run — expected FAIL**
-
-```bash
-npx vitest run tests/coverage/planner.test.ts
-```
+- [ ] **Step 2: Run: expected FAIL**
 
 - [ ] **Step 3: Write implementation**
 
@@ -383,94 +354,9 @@ import type { AffectedScreen, Coverage, CoverageGap, FsGlob, UsablConfig } from 
 
 function matchesAnyGlob(file: string, globs: string[]): boolean {
   return globs.some((g) => {
-    const re = new RegExp('^' + g.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*') + '$');
+    const re = new RegExp('^' + g.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*/g, '\x00').replace(/\*/g, '[^/]*').replace(/\x00/g, '.*') + '$');
     return re.test(file);
   });
-}
-
-export async function computeCoverage(
-  fs: FsGlob,
-  config: UsablConfig,
-  changedFiles: string[],
-): Promise<Coverage> {
-  // 1. Filter to UI files only.
-  const uiFiles = changedFiles.filter((f) => matchesAnyGlob(f, config.uiFileGlobs));
-  if (uiFiles.length === 0) {
-    return { changedFiles, affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true };
-  }
-
-  const manifest = await parseRouteManifest(fs, config.discovery);
-  const wideBlastFiles = uiFiles.filter((f) => matchesAnyGlob(f, config.discovery.wideBlastGlobs));
-  const affected: AffectedScreen[] = [];
-  const unresolvedFiles: string[] = [];
-  const gaps: CoverageGap[] = [];
-
-  // 2. Wide-blast: files matching wideBlastGlobs affect every route.
-  if (wideBlastFiles.length > 0 && manifest.routes.length > 0) {
-    for (const route of manifest.routes) {
-      affected.push({ screenId: route.screenId, url: route.url, provenance: 'wide-blast' });
-    }
-  }
-
-  // 3. Route-graph: BFS the import graph for each entry file, match changed UI files.
-  const nonWideBlast = uiFiles.filter((f) => !matchesAnyGlob(f, config.discovery.wideBlastGlobs));
-  if (nonWideBlast.length > 0 && manifest.routes.length > 0) {
-    const entryFiles = manifest.routes.map((r) => r.entryFile);
-    const graph = await buildImportGraph(fs, entryFiles, 'src');
-    for (const changed of nonWideBlast) {
-      let matched = false;
-      for (const route of manifest.routes) {
-        const closure = collectClosure(graph, route.entryFile);
-        if (closure.has(changed) || route.entryFile === changed) {
-          if (!affected.some((s) => s.screenId === route.screenId)) {
-            affected.push({
-              screenId: route.screenId,
-              url: route.url,
-              provenance: 'route-graph',
-              importChain: [route.entryFile, changed],
-            });
-          }
-          matched = true;
-        }
-      }
-      if (!matched) {
-        // 4. Manual surfaces fallback.
-        const manual = config.surfaces.find((s) => s.files.includes(changed));
-        if (manual) {
-          if (!affected.some((s) => s.screenId === manual.id)) {
-            affected.push({ screenId: manual.id, url: manual.url, provenance: 'manual' });
-          }
-        } else {
-          unresolvedFiles.push(changed);
-          gaps.push({
-            ref: changed,
-            state: 'unresolved',
-            reason: `UI file '${changed}' does not appear in the route manifest, wide-blast globs, or any manual surface entry`,
-          });
-        }
-      }
-    }
-  } else if (nonWideBlast.length > 0) {
-    // No routes at all — every non-wide-blast file is unresolved.
-    for (const f of nonWideBlast) {
-      // Check manual surfaces.
-      const manual = config.surfaces.find((s) => s.files.includes(f));
-      if (manual) {
-        if (!affected.some((s) => s.screenId === manual.id)) {
-          affected.push({ screenId: manual.id, url: manual.url, provenance: 'manual' });
-        }
-      } else {
-        unresolvedFiles.push(f);
-        gaps.push({
-          ref: f,
-          state: 'unresolved',
-          reason: `UI file '${f}' could not be mapped: no route manifest and no manual surface entry`,
-        });
-      }
-    }
-  }
-
-  return { changedFiles, affected, unresolvedFiles, gaps, nothingToCheck: false };
 }
 
 function collectClosure(graph: { get(f: string): string[] }, entry: string): Set<string> {
@@ -484,123 +370,198 @@ function collectClosure(graph: { get(f: string): string[] }, entry: string): Set
   }
   return seen;
 }
+
+export async function computeCoverage(
+  fs: FsGlob,
+  config: UsablConfig,
+  changedFiles: string[],
+): Promise<Coverage> {
+  const uiFiles = changedFiles.filter((f) => matchesAnyGlob(f, config.uiFileGlobs));
+  if (uiFiles.length === 0) {
+    return { changedFiles, affected: [], unresolvedFiles: [], gaps: [], nothingToCheck: true };
+  }
+
+  const manifest = await parseRouteManifest(fs, config.discovery);
+  const affected: AffectedScreen[] = [];
+  const unresolvedFiles: string[] = [];
+  const gaps: CoverageGap[] = [];
+  const urlOf = (routeUrl: string): string => config.appBaseUrl.replace(/\/$/, '') + routeUrl;
+  const addAffected = (s: AffectedScreen): void => {
+    if (!affected.some((a) => a.screenId === s.screenId)) affected.push(s);
+  };
+
+  // 1. Wide-blast: shell/CSS/config changes affect every known route.
+  const wideBlast = uiFiles.some((f) => matchesAnyGlob(f, config.discovery.wideBlastGlobs));
+  if (wideBlast) {
+    for (const route of manifest.routes) {
+      addAffected({ screenId: route.screenId, url: urlOf(route.url), provenance: 'wide-blast' });
+    }
+  }
+
+  // 2. Route-graph: only routes that attribute an entry file participate.
+  const routed = manifest.routes.filter((r): r is typeof r & { entryFile: string } => r.entryFile !== null);
+  const graph = routed.length > 0 ? await buildImportGraph(fs, routed.map((r) => r.entryFile)) : null;
+
+  for (const changed of uiFiles.filter((f) => !matchesAnyGlob(f, config.discovery.wideBlastGlobs))) {
+    let matched = false;
+    if (graph) {
+      for (const route of routed) {
+        const closure = collectClosure(graph, route.entryFile);
+        if (closure.has(changed)) {
+          addAffected({
+            screenId: route.screenId, url: urlOf(route.url),
+            provenance: 'route-graph', importChain: [route.entryFile, changed],
+          });
+          matched = true;
+        }
+      }
+    }
+    if (!matched) {
+      // 3. Manual surfaces: additive fallback, never a replacement.
+      const manual = config.surfaces.find((s) => s.files.includes(changed));
+      if (manual) {
+        addAffected({ screenId: manual.id, url: manual.url, provenance: 'manual' });
+      } else {
+        unresolvedFiles.push(changed);
+        gaps.push({
+          ref: changed,
+          state: 'unresolved',
+          reason: `UI file '${changed}' does not appear in any route entry-file closure, wide-blast glob, or manual surface entry`,
+        });
+      }
+    }
+  }
+
+  return { changedFiles, affected, unresolvedFiles, gaps, nothingToCheck: false };
+}
 ```
 
-- [ ] **Step 4: Run — expected PASS**
-
-```bash
-npx vitest run tests/coverage/planner.test.ts && npm run typecheck
-```
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/coverage/planner.ts tests/coverage/planner.test.ts
-git commit -m "feat: coverage planner — changed files to affected screens with gap population"
-```
+- [ ] **Step 4: Run: expected PASS**, then `npm run typecheck`.
+- [ ] **Step 5: Commit** `feat: coverage planner with gap reasons and honest route attribution`
 
 ---
 
-## Task 3 — Git-anchored guard: config-guards-itself and session pinning
+## Task 3: Hardened guard: config-guards-itself first, directory expansion, session pins
 
 **Files:**
 - `src/trust/guard.ts`
-- `tests/trust/guard.test.ts`
+- `test/trust/guard.test.ts`
 
-The guard computes `guardDivergedPaths`: paths whose working-tree content differs from
-HEAD. Config, evidence, and waiver files are always included in the guarded set
-regardless of what `config.guardedPaths` says (config-guards-itself). Session pinning
-stores sha256 of each guarded path's committed content in `os.tmpdir()`, keyed by session
-ID, so a mid-session committed tamper is caught even when `git status` is clean.
+The two properties this task must prove:
+
+1. **Config-guards-itself, ordering load-bearing.** The config FILE is checked against
+   HEAD before its contents are trusted for anything. A tampered config that removes
+   itself (or anything else) from `guardedPaths` still forces `approval_required`,
+   because the config check does not depend on the config's own contents.
+2. **Directory expansion.** A guarded directory covers every file under it, committed
+   or new: the expansion is the union of `git.lsFiles(ref, prefix)` and
+   `fs.glob([prefix, prefix + '/**'])`. Editing or adding any file under `src/gate`
+   diverges the guard. This closes the engine-self-edit hole.
 
 - [ ] **Step 1: Write failing tests**
 
 ```ts
-// tests/trust/guard.test.ts
+// test/trust/guard.test.ts
 import { describe, it, expect } from 'vitest';
-import { checkGuard, buildGuardedSet, computeSessionPins } from '../../src/trust/guard.js';
-import type { Deps, UsablConfig } from '../../src/contracts/index.js';
+import { CONFIG_PATH, buildGuardedSet, expandGuardedSet, checkGuard, computeSessionPins, diffSessionPins } from '../../src/trust/guard.js';
+import { makeFakeDeps } from '../../src/deps/fakes.js';
+import type { UsablConfig } from '../../src/contracts/index.js';
 
-const baseConfig: UsablConfig = {
+const config: UsablConfig = {
   appBaseUrl: 'http://localhost:3000',
   uiFileGlobs: ['src/**/*.tsx'],
   discovery: { routerFile: 'src/router.tsx', wideBlastGlobs: [] },
   surfaces: [],
-  guardedPaths: ['usabl.config.json'],
+  guardedPaths: ['usabl.config.json', 'src/gate'],
+  requirements: 'requirements/',
 };
 
-function makeDeps(opts: {
-  working: Record<string, string>;
-  head: Record<string, string>;
-}): Pick<Deps, 'fs' | 'git'> {
-  return {
-    fs: {
-      readFile: async (p) => opts.working[p] ?? null,
-      glob: async () => [],
-    },
-    git: {
-      writeTree: async () => 'tree-0',
-      show: async (_ref, path) => opts.head[path] ?? null,
-    },
-  };
-}
+const cleanPolicy = {
+  'usabl.config.json': '{"v":1}',
+  '.usabl-evidence.json': '{}',
+  '.usabl-waivers.json': '{}',
+  'src/gate/index.ts': 'GATE',
+};
 
 describe('buildGuardedSet', () => {
-  it('always includes evidence and waiver files regardless of config', () => {
-    const guarded = buildGuardedSet(baseConfig);
+  it('always includes config, evidence, waivers, and the requirements dir, regardless of guardedPaths', () => {
+    const stripped: UsablConfig = { ...config, guardedPaths: [] };
+    const guarded = buildGuardedSet(stripped);
+    expect(guarded).toContain(CONFIG_PATH);
     expect(guarded).toContain('.usabl-evidence.json');
     expect(guarded).toContain('.usabl-waivers.json');
-    expect(guarded).toContain('usabl.config.json');
+    expect(guarded).toContain('requirements/');
+  });
+});
+
+describe('expandGuardedSet', () => {
+  it('expands a guarded directory to committed files plus new working-tree files under it', async () => {
+    const deps = makeFakeDeps({
+      headContents: { ...cleanPolicy },
+      files: { ...cleanPolicy, 'src/gate/new-module.ts': 'NEW' },
+    });
+    const expanded = await expandGuardedSet(deps, buildGuardedSet(config));
+    expect(expanded).toContain('src/gate/index.ts');       // committed under the dir
+    expect(expanded).toContain('src/gate/new-module.ts');  // new in the working tree
+    expect(expanded).toContain(CONFIG_PATH);               // plain file entries survive
   });
 });
 
 describe('checkGuard', () => {
-  it('returns no diverged paths when working tree matches HEAD', async () => {
-    const deps = makeDeps({
-      working: { 'usabl.config.json': '{"a":1}', '.usabl-evidence.json': '{}', '.usabl-waivers.json': '{}' },
-      head: { 'usabl.config.json': '{"a":1}', '.usabl-evidence.json': '{}', '.usabl-waivers.json': '{}' },
-    });
-    const diverged = await checkGuard(deps as unknown as Deps, baseConfig);
-    expect(diverged).toHaveLength(0);
+  it('reports no divergence when the working tree matches HEAD', async () => {
+    const deps = makeFakeDeps({ headContents: cleanPolicy, files: cleanPolicy });
+    expect(await checkGuard(deps, config)).toEqual([]);
   });
 
-  it('detects a diverged config file', async () => {
-    const deps = makeDeps({
-      working: { 'usabl.config.json': '{"a":2}', '.usabl-evidence.json': '{}', '.usabl-waivers.json': '{}' },
-      head: { 'usabl.config.json': '{"a":1}', '.usabl-evidence.json': '{}', '.usabl-waivers.json': '{}' },
+  it('short-circuits on a tampered config BEFORE trusting its guardedPaths (the bypass test)', async () => {
+    // The working-tree config removed itself and everything else from guardedPaths.
+    const tampered: UsablConfig = { ...config, guardedPaths: [] };
+    const deps = makeFakeDeps({
+      headContents: cleanPolicy,
+      files: { ...cleanPolicy, 'usabl.config.json': '{"v":2,"guardedPaths":[]}' },
     });
-    const diverged = await checkGuard(deps as unknown as Deps, baseConfig);
-    expect(diverged).toContain('usabl.config.json');
+    const diverged = await checkGuard(deps, tampered);
+    expect(diverged).toEqual([CONFIG_PATH]);
   });
 
-  it('treats a file absent from HEAD as diverged', async () => {
-    const deps = makeDeps({
-      working: { 'usabl.config.json': '{"a":1}', '.usabl-evidence.json': '{}', '.usabl-waivers.json': '{}' },
-      head: { '.usabl-evidence.json': '{}', '.usabl-waivers.json': '{}' },
-      // usabl.config.json absent from HEAD — new file, diverged
+  it('detects an edit to a file INSIDE a guarded directory', async () => {
+    const deps = makeFakeDeps({
+      headContents: cleanPolicy,
+      files: { ...cleanPolicy, 'src/gate/index.ts': 'EDITED' },
     });
-    const diverged = await checkGuard(deps as unknown as Deps, baseConfig);
-    expect(diverged).toContain('usabl.config.json');
+    expect(await checkGuard(deps, config)).toContain('src/gate/index.ts');
+  });
+
+  it('detects a NEW file added under a guarded directory', async () => {
+    const deps = makeFakeDeps({
+      headContents: cleanPolicy,
+      files: { ...cleanPolicy, 'src/gate/backdoor.ts': 'X' },
+    });
+    expect(await checkGuard(deps, config)).toContain('src/gate/backdoor.ts');
   });
 });
 
-describe('computeSessionPins', () => {
-  it('returns a map of path → sha256 of committed content', async () => {
-    const deps = makeDeps({
-      working: {},
-      head: { 'usabl.config.json': 'content-A', '.usabl-evidence.json': '{}', '.usabl-waivers.json': '{}' },
-    });
-    const pins = await computeSessionPins(deps as unknown as Deps, baseConfig);
+describe('session pins', () => {
+  it('pins every expanded guarded path to a sha of its committed content', async () => {
+    const deps = makeFakeDeps({ headContents: cleanPolicy, files: cleanPolicy });
+    const pins = await computeSessionPins(deps, config);
     expect(pins['usabl.config.json']).toMatch(/^[0-9a-f]{64}$/);
+    expect(pins['src/gate/index.ts']).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('diffSessionPins reports paths whose committed content changed mid-session', async () => {
+    const before = await computeSessionPins(makeFakeDeps({ headContents: cleanPolicy, files: cleanPolicy }), config);
+    const afterDeps = makeFakeDeps({
+      headContents: { ...cleanPolicy, 'src/gate/index.ts': 'COMMITTED-TAMPER' },
+      files: { ...cleanPolicy, 'src/gate/index.ts': 'COMMITTED-TAMPER' },
+    });
+    const after = await computeSessionPins(afterDeps, config);
+    expect(diffSessionPins(before, after)).toEqual(['src/gate/index.ts']);
   });
 });
 ```
 
-- [ ] **Step 2: Run — expected FAIL**
-
-```bash
-npx vitest run tests/trust/guard.test.ts
-```
+- [ ] **Step 2: Run: expected FAIL**
 
 - [ ] **Step 3: Write implementation**
 
@@ -609,667 +570,522 @@ npx vitest run tests/trust/guard.test.ts
 import { createHash } from 'node:crypto';
 import type { Deps, UsablConfig } from '../contracts/index.js';
 
-const ALWAYS_GUARDED = ['.usabl-evidence.json', '.usabl-waivers.json'];
+export const CONFIG_PATH = 'usabl.config.json';
+const ALWAYS_GUARDED = [CONFIG_PATH, '.usabl-evidence.json', '.usabl-waivers.json'];
 
-/** Returns the complete ordered set of guarded paths. Always includes evidence +
- *  waivers files and the config file itself. Config-guards-itself invariant. */
+const sha256 = (content: string): string => createHash('sha256').update(content, 'utf8').digest('hex');
+
+/**
+ * The complete guarded set: config, evidence, and waiver files are ALWAYS included,
+ * plus the requirements directory when configured, plus config.guardedPaths.
+ * A config cannot edit anything out of the unconditional core.
+ */
 export function buildGuardedSet(config: UsablConfig): string[] {
-  const set = new Set<string>([...ALWAYS_GUARDED, ...config.guardedPaths]);
+  const set = new Set<string>([
+    ...ALWAYS_GUARDED,
+    ...(config.requirements ? [config.requirements] : []),
+    ...config.guardedPaths,
+  ]);
   return [...set].sort();
 }
 
-function sha256(content: string): string {
-  return createHash('sha256').update(content, 'utf8').digest('hex');
+/**
+ * Expand directory entries to files: union of committed files under the prefix
+ * (git.lsFiles) and working-tree files under it (fs.glob), so edits AND additions
+ * both diverge. Plain file entries pass through. Real lsFiles semantics are git
+ * pathspec listing: `git ls-tree -r --name-only HEAD -- <prefix>`.
+ */
+export async function expandGuardedSet(deps: Deps, guardedSet: string[]): Promise<string[]> {
+  const out = new Set<string>();
+  for (const entry of guardedSet) {
+    const prefix = entry.replace(/\/$/, '');
+    const committed = await deps.git.lsFiles('HEAD', prefix);
+    const working = await deps.fs.glob([prefix, `${prefix}/**`]);
+    if (committed.length === 0 && working.length === 0) { out.add(entry); continue; }
+    for (const f of [...committed, ...working]) out.add(f);
+  }
+  return [...out].sort();
 }
 
-/** Returns paths whose working-tree content differs from HEAD. An absent HEAD entry
- *  counts as diverged. Files present in HEAD but absent from working tree also diverge. */
+async function diverges(deps: Deps, path: string): Promise<boolean> {
+  const [working, committed] = await Promise.all([deps.fs.readFile(path), deps.git.show('HEAD', path)]);
+  if (working === null && committed === null) return false; // absent everywhere: nothing to compare
+  return working !== committed;
+}
+
+/**
+ * ORDERING IS LOAD-BEARING: the config file is verified against HEAD before its
+ * contents are trusted to name the rest of the guarded set. A tampered config
+ * short-circuits to approval_required no matter what it says about guardedPaths.
+ */
 export async function checkGuard(deps: Deps, config: UsablConfig): Promise<string[]> {
-  const guarded = buildGuardedSet(config);
+  if (await diverges(deps, CONFIG_PATH)) return [CONFIG_PATH];
+  const expanded = await expandGuardedSet(deps, buildGuardedSet(config));
   const diverged: string[] = [];
-  await Promise.all(
-    guarded.map(async (path) => {
-      const [working, committed] = await Promise.all([
-        deps.fs.readFile(path),
-        deps.git.show('HEAD', path),
-      ]);
-      if (working !== committed) diverged.push(path);
-    }),
-  );
+  await Promise.all(expanded.map(async (path) => {
+    if (await diverges(deps, path)) diverged.push(path);
+  }));
   return diverged.sort();
 }
 
-/** Returns a map of path → sha256(committed content) for all guarded paths.
- *  Used to build session pins stored outside the repo. A path absent from HEAD
- *  maps to the empty-string hash (signals 'not yet committed'). */
-export async function computeSessionPins(
-  deps: Deps,
-  config: UsablConfig,
-): Promise<Record<string, string>> {
-  const guarded = buildGuardedSet(config);
+/** path → sha256(committed content) over the EXPANDED guarded set. */
+export async function computeSessionPins(deps: Deps, config: UsablConfig): Promise<Record<string, string>> {
+  const expanded = await expandGuardedSet(deps, buildGuardedSet(config));
   const pins: Record<string, string> = {};
-  await Promise.all(
-    guarded.map(async (path) => {
-      const committed = await deps.git.show('HEAD', path);
-      pins[path] = sha256(committed ?? '');
-    }),
-  );
+  await Promise.all(expanded.map(async (path) => {
+    pins[path] = sha256((await deps.git.show('HEAD', path)) ?? '');
+  }));
   return pins;
+}
+
+/** Paths whose pinned committed content changed since the pins were taken. */
+export function diffSessionPins(saved: Record<string, string>, current: Record<string, string>): string[] {
+  const changed: string[] = [];
+  for (const [path, pin] of Object.entries(saved)) {
+    if (current[path] !== pin) changed.push(path);
+  }
+  for (const path of Object.keys(current)) {
+    if (!(path in saved)) changed.push(path);
+  }
+  return changed.sort();
 }
 ```
 
-- [ ] **Step 4: Run — expected PASS**
+Pin STORAGE (a tmpdir file keyed by session id, written at the first stop-hook run,
+checked on later runs) lives with the stop-hook runner in Phase 5; this module stays
+pure.
 
-```bash
-npx vitest run tests/trust/guard.test.ts && npm run typecheck
-```
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/trust/guard.ts tests/trust/guard.test.ts
-git commit -m "feat: git-anchored guard with config-guards-itself and session-pin computation"
-```
+- [ ] **Step 4: Run: expected PASS**, then `npm run typecheck`.
+- [ ] **Step 5: Commit** `feat: hardened guard with config-first ordering, directory expansion, session pins`
 
 ---
 
-## Task 4 — Three-hash receipt binding
+## Task 4: Receipt verification through the single policy hash
 
 **Files:**
-- `src/evidence/receipt.ts` (extend — Phase 1 minted a receipt; this task verifies the three hashes are split and adds `policyHash` computation via guarded set)
-- `tests/evidence/receipt.test.ts` (extend)
+- `src/evidence/receipt.ts` (extend; `computePolicyHash` and `mintReceipt` exist from Phase 1 and are NOT redefined)
+- `test/evidence/receipt-verify.test.ts`
 
-The three hashes must stay separate fields: `sourceTree` (git write-tree), `policyHash`
-(sha256 over sorted `[path, sha256(committed content)]` pairs), `runnerVersion` (already
-a field). A single collapsed hash cannot distinguish a policy change from a source change.
+`verifyReceipt` recomputes exactly what minting computed: `computePolicyHash` over the
+EXPANDED guarded set, the current `writeTree`, and `deps.runnerVersion`. Same function,
+same inputs; a receipt minted by `run()` re-verifies bit for bit.
 
 - [ ] **Step 1: Write failing tests**
 
 ```ts
-// tests/evidence/receipt-phase3.test.ts
+// test/evidence/receipt-verify.test.ts
 import { describe, it, expect } from 'vitest';
-import { computePolicyHash, verifyReceipt } from '../../src/evidence/receipt.js';
-import type { Deps, Receipt, UsablConfig } from '../../src/contracts/index.js';
+import { mintReceipt, verifyReceipt } from '../../src/evidence/receipt.js';
+import { buildGuardedSet, expandGuardedSet } from '../../src/trust/guard.js';
+import { makeFakeDeps } from '../../src/deps/fakes.js';
+import type { UsablConfig } from '../../src/contracts/index.js';
 
-const baseConfig: UsablConfig = {
+const config: UsablConfig = {
   appBaseUrl: 'http://localhost:3000',
   uiFileGlobs: ['src/**/*.tsx'],
   discovery: { routerFile: 'src/router.tsx', wideBlastGlobs: [] },
   surfaces: [],
-  guardedPaths: ['usabl.config.json'],
+  guardedPaths: ['usabl.config.json', 'src/gate'],
 };
 
-function makeDeps(head: Record<string, string>): Pick<Deps, 'git' | 'fs'> {
-  return {
-    git: { writeTree: async () => 'tree-abc', show: async (_r, p) => head[p] ?? null },
-    fs: { readFile: async (p) => head[p] ?? null, glob: async () => [] },
-  };
+const policy = {
+  'usabl.config.json': 'cfg', '.usabl-evidence.json': '{}', '.usabl-waivers.json': '{}',
+  'src/gate/index.ts': 'GATE',
+};
+
+async function mintOn(deps: ReturnType<typeof makeFakeDeps>) {
+  const expanded = await expandGuardedSet(deps, buildGuardedSet(config));
+  return mintReceipt(deps, { ...config, guardedPaths: expanded }, {
+    surfaces: ['cli'], checked: ['clusters'], notCovered: [],
+    findingsSummary: { new: 0, carried: 0, fixed: 0, unverified: 0 }, activeWaivers: 0,
+  });
 }
-
-describe('computePolicyHash', () => {
-  it('produces a deterministic hex string', async () => {
-    const deps = makeDeps({ 'usabl.config.json': 'cfg', '.usabl-evidence.json': '{}', '.usabl-waivers.json': '{}' });
-    const h1 = await computePolicyHash(deps as unknown as Deps, baseConfig);
-    const h2 = await computePolicyHash(deps as unknown as Deps, baseConfig);
-    expect(h1).toBe(h2);
-    expect(h1).toMatch(/^[0-9a-f]{64}$/);
-  });
-
-  it('changes when a guarded file changes', async () => {
-    const d1 = makeDeps({ 'usabl.config.json': 'v1', '.usabl-evidence.json': '{}', '.usabl-waivers.json': '{}' });
-    const d2 = makeDeps({ 'usabl.config.json': 'v2', '.usabl-evidence.json': '{}', '.usabl-waivers.json': '{}' });
-    const h1 = await computePolicyHash(d1 as unknown as Deps, baseConfig);
-    const h2 = await computePolicyHash(d2 as unknown as Deps, baseConfig);
-    expect(h1).not.toBe(h2);
-  });
-
-  it('does NOT change when sourceTree changes (hashes are separate)', async () => {
-    // policyHash must not incorporate sourceTree — they are separate fields
-    const deps = makeDeps({ 'usabl.config.json': 'cfg', '.usabl-evidence.json': '{}', '.usabl-waivers.json': '{}' });
-    const h1 = await computePolicyHash(deps as unknown as Deps, baseConfig);
-    // change writeTree (simulated by creating a new deps with different writeTree)
-    const deps2 = { ...deps, git: { ...deps.git, writeTree: async () => 'tree-xyz' } };
-    const h2 = await computePolicyHash(deps2 as unknown as Deps, baseConfig);
-    expect(h1).toBe(h2); // policy unchanged; source changed; they are SEPARATE
-  });
-});
 
 describe('verifyReceipt', () => {
-  it('passes when all three hashes match', async () => {
-    const deps = makeDeps({ 'usabl.config.json': 'cfg', '.usabl-evidence.json': '{}', '.usabl-waivers.json': '{}' });
-    const policyHash = await computePolicyHash(deps as unknown as Deps, baseConfig);
-    const receipt: Receipt = {
-      schemaVersion: 1,
-      sourceTree: 'tree-abc',
-      baseRevision: null,
-      policyHash,
-      runnerVersion: '0.1.0',
-      scannerVersions: { axeCore: '4.9.1', playwright: '1.45.0', chromium: '127.0' },
-      surfaces: ['clusters'],
-      coverage: { checked: ['clusters'], notCovered: [] },
-      verdict: 'verified',
-      findingsSummary: { new: 0, carried: 1, fixed: 0, unverified: 0 },
-      activeWaivers: 0,
-      mintedAt: '2026-08-19T12:00:00.000Z',
-    };
-    const ok = await verifyReceipt(deps as unknown as Deps, baseConfig, receipt, 'tree-abc');
-    expect(ok.valid).toBe(true);
-    expect(ok.failedFields).toHaveLength(0);
+  it('a receipt minted by the engine re-verifies against the same state', async () => {
+    const deps = makeFakeDeps({ headContents: policy, files: policy, writeTree: 'tree-a', runnerVersion: '0.1.0' });
+    const receipt = await mintOn(deps);
+    const check = await verifyReceipt(deps, config, receipt, 'tree-a');
+    expect(check.valid).toBe(true);
+    expect(check.failedFields).toEqual([]);
   });
 
-  it('fails when sourceTree diverges', async () => {
-    const deps = makeDeps({ 'usabl.config.json': 'cfg', '.usabl-evidence.json': '{}', '.usabl-waivers.json': '{}' });
-    const policyHash = await computePolicyHash(deps as unknown as Deps, baseConfig);
-    const receipt: Receipt = {
-      schemaVersion: 1, sourceTree: 'tree-STALE', baseRevision: null, policyHash,
-      runnerVersion: '0.1.0', scannerVersions: { axeCore: '4.9.1', playwright: '1.45.0', chromium: '127.0' },
-      surfaces: [], coverage: { checked: [], notCovered: [] }, verdict: 'verified',
-      findingsSummary: { new: 0, carried: 0, fixed: 0, unverified: 0 }, activeWaivers: 0,
-      mintedAt: '2026-08-19T12:00:00.000Z',
-    };
-    const ok = await verifyReceipt(deps as unknown as Deps, baseConfig, receipt, 'tree-abc');
-    expect(ok.valid).toBe(false);
-    expect(ok.failedFields).toContain('sourceTree');
+  it('fails on sourceTree divergence only, with policy intact', async () => {
+    const deps = makeFakeDeps({ headContents: policy, files: policy, writeTree: 'tree-a', runnerVersion: '0.1.0' });
+    const receipt = await mintOn(deps);
+    const check = await verifyReceipt(deps, config, receipt, 'tree-CHANGED');
+    expect(check.valid).toBe(false);
+    expect(check.failedFields).toEqual(['sourceTree']);
+  });
+
+  it('fails on policyHash when a guarded file changed at HEAD (committed policy edit)', async () => {
+    const deps1 = makeFakeDeps({ headContents: policy, files: policy, writeTree: 'tree-a', runnerVersion: '0.1.0' });
+    const receipt = await mintOn(deps1);
+    const deps2 = makeFakeDeps({
+      headContents: { ...policy, 'src/gate/index.ts': 'EDITED-GATE' },
+      files: { ...policy, 'src/gate/index.ts': 'EDITED-GATE' },
+      writeTree: 'tree-a', runnerVersion: '0.1.0',
+    });
+    const check = await verifyReceipt(deps2, config, receipt, 'tree-a');
+    expect(check.failedFields).toContain('policyHash');
+  });
+
+  it('fails on runnerVersion drift', async () => {
+    const deps = makeFakeDeps({ headContents: policy, files: policy, writeTree: 'tree-a', runnerVersion: '0.1.0' });
+    const receipt = await mintOn(deps);
+    const newer = makeFakeDeps({ headContents: policy, files: policy, writeTree: 'tree-a', runnerVersion: '0.2.0' });
+    const check = await verifyReceipt(newer, config, receipt, 'tree-a');
+    expect(check.failedFields).toContain('runnerVersion');
   });
 });
 ```
 
-- [ ] **Step 2: Run — expected FAIL**
+- [ ] **Step 2: Run: expected FAIL**
 
-```bash
-npx vitest run tests/evidence/receipt-phase3.test.ts
-```
-
-- [ ] **Step 3: Extend `src/evidence/receipt.ts`**
-
-Add `computePolicyHash` and `verifyReceipt` exports to the existing file. Do not remove
-or alter the Phase 1 `mintReceipt` function.
+- [ ] **Step 3: Add `verifyReceipt` to `src/evidence/receipt.ts`** (additions only; do
+  not touch `computePolicyHash` or `mintReceipt`):
 
 ```ts
-// --- additions to src/evidence/receipt.ts ---
-import { createHash } from 'node:crypto';
-import { buildGuardedSet } from '../trust/guard.js';
-import type { Deps, Receipt, UsablConfig } from '../contracts/index.js';
-
-/** sha256 over sorted [path, sha256(committed content)] pairs for all guarded paths.
- *  Does NOT incorporate sourceTree — the two fields are intentionally separate. */
-export async function computePolicyHash(deps: Deps, config: UsablConfig): Promise<string> {
-  const guarded = buildGuardedSet(config);
-  const pairs = await Promise.all(
-    guarded.map(async (path) => {
-      const content = await deps.git.show('HEAD', path);
-      const contentHash = createHash('sha256').update(content ?? '', 'utf8').digest('hex');
-      return `${path}:${contentHash}`;
-    }),
-  );
-  return createHash('sha256').update(pairs.sort().join('\n'), 'utf8').digest('hex');
-}
+// --- addition to src/evidence/receipt.ts ---
+import { buildGuardedSet, expandGuardedSet } from '../trust/guard.js';
 
 export interface ReceiptVerification {
   valid: boolean;
   failedFields: string[];
 }
 
-/** Re-verify a receipt against the current state. currentSourceTree is the output of
- *  deps.git.writeTree() at the time of verification — passed in to avoid a second write-tree. */
+/**
+ * Re-verify a receipt against the current state, using THE SAME computePolicyHash
+ * over THE SAME expanded guarded set that minting used. currentSourceTree is passed
+ * in (the caller already ran writeTree).
+ */
 export async function verifyReceipt(
   deps: Deps,
   config: UsablConfig,
   receipt: Receipt,
   currentSourceTree: string,
 ): Promise<ReceiptVerification> {
-  const [currentPolicy] = await Promise.all([computePolicyHash(deps, config)]);
+  const expanded = await expandGuardedSet(deps, buildGuardedSet(config));
+  const currentPolicy = await computePolicyHash(deps, expanded);
   const failedFields: string[] = [];
   if (receipt.sourceTree !== currentSourceTree) failedFields.push('sourceTree');
   if (receipt.policyHash !== currentPolicy) failedFields.push('policyHash');
-  // runnerVersion: compare against deps.runnerVersion if available
+  if (receipt.runnerVersion !== deps.runnerVersion) failedFields.push('runnerVersion');
   return { valid: failedFields.length === 0, failedFields };
 }
 ```
 
-- [ ] **Step 4: Run — expected PASS**
-
-```bash
-npx vitest run tests/evidence/receipt-phase3.test.ts && npm run typecheck
-```
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/evidence/receipt.ts tests/evidence/receipt-phase3.test.ts
-git commit -m "feat: three-hash receipt binding — computePolicyHash and verifyReceipt"
-```
+- [ ] **Step 4: Run: expected PASS**, then `npm run typecheck`.
+- [ ] **Step 5: Commit** `feat: verifyReceipt through the single policy hash over the expanded guarded set`
 
 ---
 
-## Task 5 — Evidence floor accept loop and `run()` wiring
+## Task 5: Wire planner, hardened guard, and expanded receipt into `run()`
 
 **Files:**
-- `src/run.ts` (extend Phase 1 orchestrator)
-- `tests/run-phase3.test.ts`
+- `src/run.ts` (modify internals; the `run(deps, config, opts?)` signature does NOT change)
+- `test/run-phase3.test.ts`
 
-Wire the planner, guard, and receipt into `run()`. The gate already consumes
-`guardDivergedPaths` to emit `approval_required`. This task:
-1. Calls `computeCoverage` (Phase 3 planner) instead of the Phase 1 stub, so gaps are
-   populated and fed to the gate.
-2. Calls `checkGuard` and passes diverged paths to the gate.
-3. Mints the receipt (only on `verified`) using the policy hash.
-4. After an accept commit, the floor matches findings and the next unchanged run converges
-   to `verified`.
+Changes inside `run()`:
+1. Replace the Phase 1 direct-mapping `computeCoverage` with the planner
+   (`src/coverage/planner.ts`).
+2. Replace `computeGuardDivergence` with `checkGuard` (config-first, expanded).
+3. Mint the receipt over the EXPANDED guarded set:
+   `mintReceipt(deps, { ...config, guardedPaths: expanded }, args)`.
+4. Trusted-ref floor/waiver reads already exist from Phase 1 (`readPolicyJson`).
+   CI mints no receipts on PRs, so trusted-ref policy hashing at mint time is a
+   documented seam, not contest work.
 
-- [ ] **Step 1: Write failing tests**
+- [ ] **Step 1: Write failing tests** (note the identity keys: `button-name` is
+  identity-weak, so its floor entry is COUNT-based with `elementKey: null`; a
+  name-based entry uses the `computeIdentity` key shape `screen|rule|name:slug`):
 
 ```ts
-// tests/run-phase3.test.ts
+// test/run-phase3.test.ts
 import { describe, it, expect } from 'vitest';
 import { run } from '../../src/run.js';
-import type { Deps, EvidenceFloor, ScreenScan, UsablConfig } from '../../src/contracts/index.js';
+import { makeFakeDeps } from '../../src/deps/fakes.js';
+import type { Draft, EvidenceFloor, ScreenScan, UsablConfig } from '../../src/contracts/index.js';
 
-const baseConfig: UsablConfig = {
+const config: UsablConfig = {
   appBaseUrl: 'http://localhost:3000',
   uiFileGlobs: ['src/**/*.tsx'],
   discovery: { routerFile: 'src/router.tsx', wideBlastGlobs: [] },
-  surfaces: [{ id: 'clusters', url: '/clusters', files: ['src/ClustersPage.tsx'] }],
+  surfaces: [{ id: 'clusters', url: 'http://localhost:3000/clusters', files: ['src/ClustersPage.tsx'] }],
   guardedPaths: ['usabl.config.json'],
 };
 
-const emptyFloor: EvidenceFloor = { version: 1, entries: [] };
-const cleanHead = { 'usabl.config.json': '{}', '.usabl-evidence.json': '{}', '.usabl-waivers.json': '{}' };
+const cleanPolicy = {
+  'usabl.config.json': '{}', '.usabl-evidence.json': '{}', '.usabl-waivers.json': '{}',
+};
 
-function makeDeps(opts: {
-  files: Record<string, string>;
-  head?: Record<string, string>;
-  changedFiles: string[];
-  scan?: ScreenScan;
-}): Deps {
-  const head = opts.head ?? cleanHead;
-  return {
-    clock: () => '2026-08-19T12:00:00.000Z',
-    runnerVersion: '0.1.0-test',
-    scannerVersions: { axeCore: '4.9.1', playwright: '1.45.0', chromium: '127.0' },
-    git: {
-      writeTree: async () => 'tree-test',
-      show: async (_ref, path) => head[path] ?? null,
-    },
-    fs: {
-      readFile: async (p) => opts.files[p] ?? null,
-      glob: async (pats) =>
-        Object.keys(opts.files).filter((f) =>
-          pats.some((p) => new RegExp('^' + p.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*') + '$').test(f))
-        ),
-    },
-    browser: { newPage: async () => { throw new Error('no browser in unit tests'); }, close: async () => {} } as any,
-    checkRunner: {
-      scan: async (_s) => opts.scan ?? { screenId: 'clusters', url: '/clusters', stops: [], drafts: [] },
-    },
-  };
-}
+const unnamedButton: Draft = {
+  rule: 'button-name', layer: 'axe', severity: 'critical', evidenceClass: 'deterministic',
+  screenId: 'clusters', elementPath: 'button:nth-child(1)', elementName: null, role: 'button',
+  whatUserExperiences: 'no accessible name', why: 'icon-only', fix: 'add aria-label',
+  evidence: {}, confidence: 'fail',
+};
 
-describe('run() — Phase 3 wiring', () => {
-  it('returns nothingToCheck verdict null when no UI files changed', async () => {
-    const deps = makeDeps({ files: { 'usabl.config.json': '{}' }, changedFiles: [] });
-    const result = await run(deps, baseConfig, []);
-    expect(result.verdict).toBeNull();
-    expect(result.coverage.nothingToCheck).toBe(true);
-    expect(result.exitCode).toBe(0);
+const namedContrast: Draft = {
+  rule: 'color-contrast', layer: 'axe', severity: 'serious', evidenceClass: 'deterministic',
+  screenId: 'clusters', elementPath: 'h1:nth-child(1)', elementName: 'Clusters', role: 'heading',
+  whatUserExperiences: 'low contrast', why: 'ratio 2.5', fix: 'raise contrast',
+  evidence: { name: { value: 'Clusters', source: 'ax-tree', fromTree: true } }, confidence: 'fail',
+};
+
+const scanOf = (drafts: Draft[]): ScreenScan =>
+  ({ screenId: 'clusters', url: 'http://localhost:3000/clusters', stops: [], drafts, gaps: [] });
+
+describe('run() with Phase 3 wiring', () => {
+  it('is idle when no UI files changed and policy is clean', async () => {
+    const deps = makeFakeDeps({ files: cleanPolicy, headContents: cleanPolicy });
+    const r = await run(deps, config, { changedFiles: ['README.md'] });
+    expect(r.verdict).toBeNull();
+    expect(r.exitCode).toBe(0);
   });
 
-  it('returns approval_required when a guarded file diverges from HEAD', async () => {
-    const dirtyHead = { ...cleanHead, 'usabl.config.json': '{"old":true}' };
-    const deps = makeDeps({
-      files: { 'usabl.config.json': '{"new":true}', '.usabl-evidence.json': '{}', '.usabl-waivers.json': '{}' },
-      head: dirtyHead,
-      changedFiles: ['src/ClustersPage.tsx'],
+  it('is approval_required when the config diverges, even on a docs-only diff', async () => {
+    const deps = makeFakeDeps({
+      files: { ...cleanPolicy, 'usabl.config.json': '{"tampered":true}' },
+      headContents: cleanPolicy,
     });
-    const result = await run(deps, baseConfig, ['src/ClustersPage.tsx']);
-    expect(result.verdict).toBe('approval_required');
-    expect(result.exitCode).toBe(2);
-    expect(result.dirtyGuardedPaths).toContain('usabl.config.json');
+    const r = await run(deps, config, { changedFiles: ['README.md'] });
+    expect(r.verdict).toBe('approval_required');
+    expect(r.dirtyGuardedPaths).toContain('usabl.config.json');
+    expect(r.exitCode).toBe(2);
   });
 
-  it('returns not_covered when a UI file maps to no screen', async () => {
-    const deps = makeDeps({
-      files: { ...cleanHead, 'usabl.routes.json': JSON.stringify({ routes: [] }), 'src/Orphan.tsx': 'export default function Orphan() {}' },
-      head: cleanHead,
-      changedFiles: ['src/Orphan.tsx'],
+  it('is not_covered with a written gap when a UI file maps to nothing', async () => {
+    const deps = makeFakeDeps({
+      files: { ...cleanPolicy, 'usabl.routes.json': JSON.stringify({ routes: [] }), 'src/Orphan.tsx': 'x' },
+      headContents: cleanPolicy,
     });
-    const result = await run(deps, baseConfig, ['src/Orphan.tsx']);
-    expect(result.verdict).toBe('not_covered');
-    expect(result.exitCode).toBe(3);
-    expect(result.coverage.gaps.length).toBeGreaterThan(0);
+    const r = await run(deps, config, { changedFiles: ['src/Orphan.tsx'] });
+    expect(r.verdict).toBe('not_covered');
+    expect(r.exitCode).toBe(3);
+    expect(r.coverage.gaps.length).toBeGreaterThan(0);
   });
 
-  it('converges to verified after an accept commit lands (floor matches findings)', async () => {
-    // Simulate: policy clean, one carried finding on the floor, no new findings.
-    const files = {
-      ...cleanHead,
-      'usabl.routes.json': JSON.stringify({
-        routes: [{ screenId: 'clusters', url: '/clusters', entryFile: 'src/ClustersPage.tsx' }],
-      }),
-      'src/ClustersPage.tsx': 'export default function ClustersPage() {}',
-      '.usabl-evidence.json': JSON.stringify({
-        version: 1,
-        entries: [{ screenId: 'clusters', layer: 'axe', rule: 'color-contrast', elementKey: 'h1#title', identityBasis: 'name', count: 1 }],
-      } satisfies EvidenceFloor),
+  it('converges to verified when the floor carries a count-based accepted finding', async () => {
+    const floor: EvidenceFloor = {
+      version: 1,
+      entries: [{ screenId: 'clusters', layer: 'axe', rule: 'button-name', elementKey: null, identityBasis: 'count', count: 1 }],
     };
-    const acceptedScan: ScreenScan = {
-      screenId: 'clusters', url: '/clusters', stops: [],
-      drafts: [{
-        rule: 'color-contrast', layer: 'axe', severity: 'serious', evidenceClass: 'deterministic',
-        screenId: 'clusters', elementPath: 'h1#title', elementName: 'title', role: 'heading',
-        whatUserExperiences: 'low contrast', why: 'ratio 2.5', fix: 'increase contrast',
-        evidence: {}, confidence: 'fail',
-      }],
+    const files = { ...cleanPolicy, '.usabl-evidence.json': JSON.stringify(floor), 'src/ClustersPage.tsx': 'x' };
+    const deps = makeFakeDeps({
+      files, headContents: files, writeTree: 'tree-accept',
+      scans: { clusters: scanOf([unnamedButton]) },
+    });
+    const r = await run(deps, config, { changedFiles: ['src/ClustersPage.tsx'] });
+    expect(r.verdict).toBe('verified');
+    expect(r.receipt).not.toBeNull();
+    expect(r.receipt!.sourceTree).toBe('tree-accept');
+  });
+
+  it('converges to verified when the floor carries a name-keyed accepted finding', async () => {
+    const floor: EvidenceFloor = {
+      version: 1,
+      entries: [{ screenId: 'clusters', layer: 'axe', rule: 'color-contrast', elementKey: 'clusters|color-contrast|name:clusters', identityBasis: 'name', count: 1 }],
     };
-    const deps = makeDeps({ files, head: files, changedFiles: ['src/ClustersPage.tsx'], scan: acceptedScan });
-    const result = await run(deps, baseConfig, ['src/ClustersPage.tsx']);
-    expect(result.verdict).toBe('verified');
-    expect(result.exitCode).toBe(0);
-    expect(result.receipt).not.toBeNull();
-    expect(result.receipt!.schemaVersion).toBe(1);
-    expect(result.receipt!.sourceTree).toBe('tree-test');
-    expect(result.receipt!.policyHash).toMatch(/^[0-9a-f]{64}$/);
+    const files = { ...cleanPolicy, '.usabl-evidence.json': JSON.stringify(floor), 'src/ClustersPage.tsx': 'x' };
+    const deps = makeFakeDeps({
+      files, headContents: files,
+      scans: { clusters: scanOf([namedContrast]) },
+    });
+    const r = await run(deps, config, { changedFiles: ['src/ClustersPage.tsx'] });
+    expect(r.verdict).toBe('verified');
+    expect(r.findings.find((f) => f.rule === 'color-contrast')!.status).toBe('carried');
+  });
+
+  it('a PR cannot self-accept: with trustedRef, the working-tree floor is ignored AND its edit blocks', async () => {
+    const acceptedFloor: EvidenceFloor = {
+      version: 1,
+      entries: [{ screenId: 'clusters', layer: 'axe', rule: 'button-name', elementKey: null, identityBasis: 'count', count: 1 }],
+    };
+    const head = { ...cleanPolicy, 'src/ClustersPage.tsx': 'x' };
+    const deps = makeFakeDeps({
+      files: { ...head, '.usabl-evidence.json': JSON.stringify(acceptedFloor) }, // PR tries to self-accept
+      headContents: head,                                                        // trusted ref: empty floor
+      scans: { clusters: scanOf([unnamedButton]) },
+    });
+    const r = await run(deps, config, { changedFiles: ['src/ClustersPage.tsx'], trustedRef: 'HEAD' });
+    // The uncommitted floor edit diverges the guard; and even without the guard,
+    // the trusted-ref floor is empty so the finding would regress. Either way: never verified.
+    expect(r.verdict).not.toBe('verified');
+    expect(r.receipt).toBeNull();
   });
 });
 ```
 
-- [ ] **Step 2: Run — expected FAIL**
+- [ ] **Step 2: Run: expected FAIL**
 
-```bash
-npx vitest run tests/run-phase3.test.ts
-```
-
-- [ ] **Step 3: Update `src/run.ts`**
-
-Replace the Phase 1 `computeCoverage` stub with the Phase 3 planner, call `checkGuard`,
-and invoke `computePolicyHash` before passing `policyHash` to `mintReceipt`. The gate
-call and the rest of the orchestration remain as Phase 1 left them.
+- [ ] **Step 3: Update `src/run.ts` internals**
 
 ```ts
-// Key changes to src/run.ts (replace the stub computeCoverage and add guard + policy hash):
-
-// Remove the inline computeCoverage stub and import the real planner:
+// Replace the Phase 1 stub imports:
 import { computeCoverage } from './coverage/planner.js';
-import { checkGuard } from './trust/guard.js';
-import { computePolicyHash } from './evidence/receipt.js';
+import { checkGuard, buildGuardedSet, expandGuardedSet } from './trust/guard.js';
 
-// In run():
-//   1. Call computeCoverage(deps.fs, config, changedFiles) instead of the stub.
-//   2. Call checkGuard(deps, config) to get guardDivergedPaths.
-//   3. When minting the receipt, pass policyHash: await computePolicyHash(deps, config).
+// Inside run(): coverage from the planner (async now), guard via checkGuard,
+// and the receipt minted over the expanded guarded set:
+const baseCoverage = await computeCoverage(deps.fs, config, changed);
+const guardDivergedPaths = await checkGuard(deps, config);
+// ... scans, gap merge, floor/waivers via readPolicyJson (unchanged from Phase 1) ...
+const receipt = gated.verdict === 'verified'
+  ? await mintReceipt(
+      deps,
+      { ...config, guardedPaths: await expandGuardedSet(deps, buildGuardedSet(config)) },
+      { surfaces: ['cli'], checked: coverage.affected.map((a) => a.screenId),
+        notCovered: coverage.unresolvedFiles, findingsSummary: summarize(gated.findings),
+        activeWaivers: gated.findings.filter((f) => f.status === 'waived').length },
+    )
+  : null;
 ```
 
-The full updated `run()` body (replace from the `computeCoverage` call onward):
-
-```ts
-export async function run(deps: Deps, config: UsablConfig, changedFiles: string[]): Promise<Result> {
-  const now = deps.clock();
-
-  // 1. Coverage (Phase 3 planner — gaps populated).
-  const coverage = await computeCoverage(deps.fs, config, changedFiles);
-
-  // 2. Guard (Phase 3) — must run even when nothingToCheck so a policy edit is caught.
-  const guardDivergedPaths = await checkGuard(deps, config);
-
-  // 3. Idle path — nothing to check.
-  if (coverage.nothingToCheck && guardDivergedPaths.length === 0) {
-    return {
-      schemaVersion: 'usabl.result.v1', verdict: null,
-      summary: 'Nothing to check: no UI-touching files changed.',
-      screens: [], coverage, findings: [], receipt: null, dirtyGuardedPaths: [], exitCode: 0,
-    };
-  }
-
-  // 4. Load floor and waivers.
-  const floorRaw = await readJson<EvidenceFloor>(deps, '.usabl-evidence.json');
-  const floor = floorRaw ?? EMPTY_FLOOR;
-  const waiversRaw = await readJson<WaiverLedger>(deps, '.usabl-waivers.json');
-  const waivers = waiversRaw?.waivers ?? [];
-
-  // 5. Run checks (skipped when not_covered or approval_required to avoid partial scans).
-  let screens: ScreenScan[] = [];
-  if (coverage.affected.length > 0 && guardDivergedPaths.length === 0) {
-    screens = await Promise.all(coverage.affected.map((s) => deps.checkRunner.scan(s)));
-  }
-  const drafts = screens.flatMap((s) => s.drafts);
-
-  // 6. Gate.
-  const gateInput: GateInput = { coverage, guardDivergedPaths, drafts, floor, waivers, now };
-  const gateOut = gate(gateInput);
-
-  // 7. Receipt: only on verified.
-  let receipt: Receipt | null = null;
-  if (gateOut.verdict === 'verified') {
-    const [sourceTree, policyHash] = await Promise.all([
-      deps.git.writeTree(),
-      computePolicyHash(deps, config),
-    ]);
-    const findingsSummary = buildFindingsSummary(gateOut.findings);
-    receipt = await mintReceipt(deps, config, {
-      sourceTree, policyHash,
-      baseRevision: null,
-      findingsSummary,
-      activeWaivers: gateOut.findings.filter((f) => f.status === 'waived').length,
-    });
-  }
-
-  return {
-    schemaVersion: 'usabl.result.v1',
-    verdict: gateOut.verdict,
-    summary: gateOut.summary,
-    screens,
-    coverage,
-    findings: gateOut.findings,
-    receipt,
-    dirtyGuardedPaths: guardDivergedPaths,
-    exitCode: gateOut.exitCode,
-  };
-}
-```
-
-- [ ] **Step 4: Run — expected PASS**
+- [ ] **Step 4: Run the new tests, then the FULL suite.** Phase 1's run tests and the
+  golden oracle must still pass. The oracle's canonical output changes shape only if a
+  fixture was wrong; regenerate with `UPDATE_GOLDEN=1` ONLY after eyeballing the diff.
 
 ```bash
-npx vitest run tests/run-phase3.test.ts && npm run typecheck
+npx vitest run test/run-phase3.test.ts && npx vitest run && npm run typecheck
 ```
 
-- [ ] **Step 5: Run full suite to check for regressions**
-
-```bash
-npx vitest run && npm run typecheck
-```
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add src/run.ts tests/run-phase3.test.ts
-git commit -m "feat: wire Phase 3 coverage planner, guard, and receipt into run()"
-```
+- [ ] **Step 5: Commit** `feat: wire planner, hardened guard, and expanded receipt into run()`
 
 ---
 
-## Task 6 — Integration: policy edit → `approval_required`; accept commit → `verified`; receipt re-verifies
+## Task 6: Exit-criterion integration: policy edit blocks, accept converges, receipt re-verifies, bypass is closed
 
 **Files:**
-- `tests/integration/phase3-exit-criterion.test.ts`
+- `test/integration/phase3-exit-criterion.test.ts`
 
-This is the exit-criterion test. It simulates the full lifecycle in memory: clean state,
-then a policy edit, then the accept commit that writes the floor and pins the config.
+The full lifecycle over `makeFakeDeps`, including the security regression tests for the
+config self-guard bypass and the engine-self-edit hole.
 
 - [ ] **Step 1: Write the integration test**
 
 ```ts
-// tests/integration/phase3-exit-criterion.test.ts
+// test/integration/phase3-exit-criterion.test.ts
 import { describe, it, expect } from 'vitest';
 import { run } from '../../src/run.js';
 import { verifyReceipt } from '../../src/evidence/receipt.js';
-import type { Deps, EvidenceFloor, ScreenScan, UsablConfig } from '../../src/contracts/index.js';
+import { makeFakeDeps } from '../../src/deps/fakes.js';
+import type { Draft, EvidenceFloor, ScreenScan, UsablConfig } from '../../src/contracts/index.js';
 
-const CONFIG_PATH = 'usabl.config.json';
-
-const baseConfig: UsablConfig = {
+const config: UsablConfig = {
   appBaseUrl: 'http://localhost:3000',
   uiFileGlobs: ['src/**/*.tsx'],
   discovery: { routerFile: 'src/router.tsx', wideBlastGlobs: [] },
-  surfaces: [{ id: 'clusters', url: '/clusters', files: ['src/ClustersPage.tsx'] }],
-  guardedPaths: [CONFIG_PATH],
+  surfaces: [{ id: 'clusters', url: 'http://localhost:3000/clusters', files: ['src/ClustersPage.tsx'] }],
+  guardedPaths: ['usabl.config.json', 'src/gate'],
 };
 
-const routeManifest = JSON.stringify({
-  routes: [{ screenId: 'clusters', url: '/clusters', entryFile: 'src/ClustersPage.tsx' }],
-});
-
-const oneDraft: ScreenScan = {
-  screenId: 'clusters', url: '/clusters', stops: [],
-  drafts: [{
-    rule: 'button-name', layer: 'axe', severity: 'critical', evidenceClass: 'deterministic',
-    screenId: 'clusters', elementPath: 'button#icon', elementName: null, role: 'button',
-    whatUserExperiences: 'no accessible name', why: 'icon-only', fix: 'add aria-label',
-    evidence: {}, confidence: 'fail',
-  }],
+const iconDraft: Draft = {
+  rule: 'button-name', layer: 'axe', severity: 'critical', evidenceClass: 'deterministic',
+  screenId: 'clusters', elementPath: 'button:nth-child(1)', elementName: null, role: 'button',
+  whatUserExperiences: 'no accessible name', why: 'icon-only', fix: 'add aria-label',
+  evidence: {}, confidence: 'fail',
 };
+const scanOf = (drafts: Draft[]): ScreenScan =>
+  ({ screenId: 'clusters', url: 'http://localhost:3000/clusters', stops: [], drafts, gaps: [] });
 
-function makeDeps(opts: {
-  working: Record<string, string>;
-  head: Record<string, string>;
-  scan?: ScreenScan;
-}): Deps {
-  return {
-    clock: () => '2026-08-19T12:00:00.000Z',
-    runnerVersion: '0.1.0-test',
-    scannerVersions: { axeCore: '4.9.1', playwright: '1.45.0', chromium: '127.0' },
-    git: {
-      writeTree: async () => 'tree-integration',
-      show: async (_ref, p) => opts.head[p] ?? null,
-    },
-    fs: {
-      readFile: async (p) => opts.working[p] ?? null,
-      glob: async (pats) =>
-        Object.keys(opts.working).filter((f) =>
-          pats.some((p) => new RegExp('^' + p.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*') + '$').test(f))
-        ),
-    },
-    browser: { newPage: async () => { throw new Error('no browser'); }, close: async () => {} } as any,
-    checkRunner: { scan: async () => opts.scan ?? { screenId: 'clusters', url: '/clusters', stops: [], drafts: [] } },
-  };
-}
+const committed = {
+  'usabl.config.json': '{"v":1}', '.usabl-evidence.json': '{}', '.usabl-waivers.json': '{}',
+  'src/gate/index.ts': 'GATE', 'src/ClustersPage.tsx': 'PAGE',
+};
 
 describe('Phase 3 exit criterion', () => {
-  it('scenario: policy edit forces approval_required', async () => {
-    // HEAD has config v1; working tree has config v2 (uncommitted edit)
-    const headFiles = { [CONFIG_PATH]: '{"v":1}', '.usabl-evidence.json': '{}', '.usabl-waivers.json': '{}' };
-    const workingFiles = {
-      ...headFiles,
-      [CONFIG_PATH]: '{"v":2}',     // diverged!
-      'usabl.routes.json': routeManifest,
-      'src/ClustersPage.tsx': 'export default function ClustersPage() {}',
-    };
-    const deps = makeDeps({ working: workingFiles, head: headFiles, scan: oneDraft });
-    const result = await run(deps, baseConfig, ['src/ClustersPage.tsx']);
-    expect(result.verdict).toBe('approval_required');
-    expect(result.exitCode).toBe(2);
-    expect(result.dirtyGuardedPaths).toContain(CONFIG_PATH);
-    expect(result.receipt).toBeNull(); // no receipt until verified
+  it('an uncommitted policy edit forces approval_required and mints nothing', async () => {
+    const deps = makeFakeDeps({
+      headContents: committed,
+      files: { ...committed, '.usabl-waivers.json': '{"version":1,"waivers":[]}' }, // edited, uncommitted
+      scans: { clusters: scanOf([iconDraft]) },
+    });
+    const r = await run(deps, config, { changedFiles: ['src/ClustersPage.tsx'] });
+    expect(r.verdict).toBe('approval_required');
+    expect(r.receipt).toBeNull();
   });
 
-  it('scenario: accept commit converges next run to verified', async () => {
-    // Simulate the state AFTER the accept commit: HEAD and working tree are identical,
-    // evidence floor on disk matches the one found-finding identity.
+  it('SECURITY: a config that drops itself from guardedPaths is still caught', async () => {
+    const strippedConfig: UsablConfig = { ...config, guardedPaths: [] };
+    const deps = makeFakeDeps({
+      headContents: committed,
+      files: { ...committed, 'usabl.config.json': '{"v":2,"guardedPaths":[]}' },
+      scans: { clusters: scanOf([]) },
+    });
+    const r = await run(deps, strippedConfig, { changedFiles: ['src/ClustersPage.tsx'] });
+    expect(r.verdict).toBe('approval_required');
+    expect(r.dirtyGuardedPaths).toEqual(['usabl.config.json']);
+    expect(r.receipt).toBeNull();
+  });
+
+  it('SECURITY: editing engine source under a guarded directory blocks', async () => {
+    const deps = makeFakeDeps({
+      headContents: committed,
+      files: { ...committed, 'src/gate/index.ts': 'PATCHED-GATE' },
+      scans: { clusters: scanOf([]) },
+    });
+    const r = await run(deps, config, { changedFiles: ['src/ClustersPage.tsx'] });
+    expect(r.verdict).toBe('approval_required');
+    expect(r.dirtyGuardedPaths).toContain('src/gate/index.ts');
+  });
+
+  it('the accept commit converges the next run to verified and the receipt re-verifies', async () => {
     const acceptedFloor: EvidenceFloor = {
       version: 1,
-      entries: [{
-        screenId: 'clusters', layer: 'axe', rule: 'button-name',
-        elementKey: 'button#icon', identityBasis: 'name', count: 1,
-      }],
+      entries: [{ screenId: 'clusters', layer: 'axe', rule: 'button-name', elementKey: null, identityBasis: 'count', count: 1 }],
     };
-    const syncedFiles = {
-      [CONFIG_PATH]: '{"v":2}',
-      '.usabl-evidence.json': JSON.stringify(acceptedFloor),
-      '.usabl-waivers.json': '{}',
-      'usabl.routes.json': routeManifest,
-      'src/ClustersPage.tsx': 'export default function ClustersPage() {}',
-    };
-    const deps = makeDeps({ working: syncedFiles, head: syncedFiles, scan: oneDraft });
-    const result = await run(deps, baseConfig, ['src/ClustersPage.tsx']);
-    expect(result.verdict).toBe('verified');
-    expect(result.exitCode).toBe(0);
-    expect(result.receipt).not.toBeNull();
-    const r = result.receipt!;
-    expect(r.sourceTree).toBe('tree-integration');
-    expect(r.policyHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(r.schemaVersion).toBe(1);
-  });
+    const accepted = { ...committed, '.usabl-evidence.json': JSON.stringify(acceptedFloor) };
+    const deps = makeFakeDeps({
+      headContents: accepted, files: accepted, writeTree: 'tree-accepted', runnerVersion: '0.1.0',
+      scans: { clusters: scanOf([iconDraft]) },
+    });
+    const r = await run(deps, config, { changedFiles: ['src/ClustersPage.tsx'] });
+    expect(r.verdict).toBe('verified');
+    expect(r.exitCode).toBe(0);
+    expect(r.receipt).not.toBeNull();
 
-  it('scenario: minted receipt re-verifies against source, policy, and result', async () => {
-    const syncedFiles = {
-      [CONFIG_PATH]: '{"v":2}',
-      '.usabl-evidence.json': JSON.stringify({ version: 1, entries: [] } satisfies EvidenceFloor),
-      '.usabl-waivers.json': '{}',
-      'usabl.routes.json': routeManifest,
-      'src/ClustersPage.tsx': 'export default function ClustersPage() {}',
-    };
-    const deps = makeDeps({ working: syncedFiles, head: syncedFiles });
-    const result = await run(deps, baseConfig, ['src/ClustersPage.tsx']);
-    expect(result.verdict).toBe('verified');
-    const receipt = result.receipt!;
-    // Re-verify: same state → all three hashes match.
-    const verify = await verifyReceipt(deps, baseConfig, receipt, 'tree-integration');
-    expect(verify.valid).toBe(true);
-    expect(verify.failedFields).toHaveLength(0);
+    const check = await verifyReceipt(deps, config, r.receipt!, 'tree-accepted');
+    expect(check.valid).toBe(true);
+    expect(check.failedFields).toEqual([]);
   });
 });
 ```
 
-- [ ] **Step 2: Run — expected FAIL** (run() not yet wired to produce verified in all cases)
-
-```bash
-npx vitest run tests/integration/phase3-exit-criterion.test.ts
-```
-
-- [ ] **Step 3: Fix any remaining wiring gaps in `src/run.ts` until all three scenarios pass**
-
-- [ ] **Step 4: Run full suite**
+- [ ] **Step 2: Run: fix any wiring gap in `src/run.ts` until all scenarios pass**
+- [ ] **Step 3: Full suite + typecheck**
 
 ```bash
 npx vitest run && npm run typecheck
 ```
 
-Expected: all tests PASS, no type errors.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add tests/integration/phase3-exit-criterion.test.ts src/run.ts
-git commit -m "test: Phase 3 exit-criterion integration — policy edit, accept commit, receipt verify"
-```
+- [ ] **Step 4: Commit** `test: Phase 3 exit criterion incl. config self-guard and directory-guard security cases`
 
 ---
 
 ## Self-Review
 
-**Coverage:** Tasks 1-2 cover the full route-graph + wide-blast + manual-surface path,
-unresolved files, gap population, and the `nothingToCheck` vs `not_covered` distinction.
-`gaps` is populated by the planner and consumed by the gate (via `guardDivergedPaths` and
-the existing `not_covered` path in Phase 1's gate).
+**Coverage:** planner produces route-graph, wide-blast, and manual provenance; every
+unmapped UI file carries a `CoverageGap` with a written reason; regex-fallback routes
+never pretend to attribute entry files; the import graph probes file existence instead
+of guessing extensions.
 
-**Guard:** Task 3 covers config-guards-itself (always-guarded set includes config, evidence,
-waivers), divergence detection against HEAD, and session-pin computation. The guard runs
-before checks so no scan is issued against a dirty policy.
+**Guard:** the config file is checked FIRST and unconditionally; the bypass (config
+edits itself out of `guardedPaths`) has a dedicated security test; directory guarded
+paths expand to committed plus working-tree files, closing the engine-self-edit hole;
+session pins cover the expanded set, and `diffSessionPins` is pure (storage is the
+Phase 5 stop-hook runner's job).
 
-**Receipt:** Task 4 verifies that `sourceTree`, `policyHash`, and `runnerVersion` are
-separate fields and that `policyHash` is independently stable — a source change does not
-alter `policyHash` and vice versa. `verifyReceipt` checks all three independently.
+**Receipt:** exactly one policy hash (`computePolicyHash`, defined in Phase 1) computed
+over the expanded guarded set at mint AND at verify; `verifyReceipt` also checks
+`runnerVersion`. A receipt minted by `run()` re-verifies in the integration test.
 
-**Accept loop:** Task 5 wires the planner and guard into `run()` and Task 6 proves the
-full lifecycle: policy edit → `approval_required` (no receipt), accept commit → `verified`
-(receipt minted), receipt re-verifies.
+**run():** the frozen `run(deps, config, opts?)` signature is untouched; trusted-ref
+floor/waiver reads come from Phase 1's `readPolicyJson`; the trusted-ref test proves a
+PR cannot self-accept its own floor.
 
-**Placeholder scan:** No `TODO`, `TBD`, or undefined types appear in any code block.
-All types are imported from `../contracts/index.js` (frozen Phase 1 contracts).
+**Floors:** accept only `confidence: 'fail'` findings. Stated in Phase 1 Task 8 and
+respected here: no test writes an unverified finding into a floor.
 
-**Type consistency:** `Coverage`, `CoverageGap`, `AffectedScreen`, `Receipt`,
-`EvidenceFloor`, `Waiver`, `Result`, `Deps`, `UsablConfig`, `GateInput`, `GateOutput`,
-`ScreenScan`, `FsGlob`, `GitReader` — all used verbatim from the frozen contract set.
-`RouteEntry` and `RouteManifest` are new local types in `src/coverage/route-manifest.ts`,
-not added to the shared contract (they are internal to the coverage subsystem).
-`schemaVersion: 'usabl.result.v1'` is echoed on every `Result` returned.
+**Fakes:** every test uses `makeFakeDeps`. No hand-rolled `Deps`, no `as any`, no
+invented `BrowserDriver` shapes.

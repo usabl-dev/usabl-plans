@@ -1,10 +1,10 @@
-# usabl Core Foundation — Implementation Plan
+# usabl Core Foundation: Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task.
 > Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Stand up the verdict core of usabl — a pure `run(deps, config)` that produces
+**Goal:** Stand up the verdict core of usabl: a pure `run(deps, config)` that produces
 a canonical `Result` with all four verdicts (`verified`, `regression`, `not_covered`,
 `approval_required`) plus the idle non-verdict, reachable over in-memory fakes, backed
 by a re-verifiable receipt.
@@ -35,9 +35,9 @@ usabl/
   src/
     contracts/index.ts         ALL frozen types (single import surface)
     primitives/
-      sortKey.ts               sortBy(items, keyFn) — stable, pure
+      sortKey.ts               sortBy(items, keyFn): stable, pure
       canonical.ts             canonicalize(value), sha256(text), canonicalHash(value)
-      slug.ts                  slug(text) — stable token for identity keys
+      slug.ts                  slug(text): stable token for identity keys
       identity.ts              computeIdentity(draft) -> { elementKey, identityBasis }
     deps/
       fakes.ts                 makeFakeDeps() + fake builders for every Deps member
@@ -54,16 +54,22 @@ usabl/
 ```
 
 **Public API (frozen names used across all later phases):**
-- `run(deps: Deps, config: UsablConfig): Promise<Result>`
+- `run(deps: Deps, config: UsablConfig, opts?: RunOptions): Promise<Result>`: `opts` is
+  optional and additive; two-argument calls keep working. CI passes
+  `{ changedFiles, trustedRef }`.
 - `gate(input: GateInput): GateOutput`
 - `computeIdentity(draft: Draft): { elementKey: string | null; identityBasis: IdentityBasis }`
 - `canonicalize(value: unknown): string`, `sha256(text: string): string`,
   `canonicalHash(value: unknown): string`
 - `sortBy<T>(items: T[], keyFn: (t: T) => string): T[]`
 - `mintReceipt(deps: Deps, config: UsablConfig, args: ReceiptArgs): Promise<Receipt>`
+- `computePolicyHash(deps: Deps, guardedPaths: string[], ref?: string): Promise<string>` :
+  the ONLY policy hash definition; minting and verification both call it.
 - `formatSummary(result: Result): string`
 - `computeConformance(result: Result): ConformanceSummary`
 - `makeFakeDeps(overrides?: Partial<FakeDepsSpec>): Deps`
+- `makeFakePage(overrides?: Partial<Page>): Page`: every test fake Page comes from here;
+  no hand-rolled Page literals in tests.
 
 ---
 
@@ -171,7 +177,7 @@ export default defineConfig({
 
 Run: `npm install && npm test`
 Expected: PASS (1 test). If `npm install` cannot reach the registry, stop and resolve
-the registry/proxy before continuing — do not skip.
+the registry/proxy before continuing: do not skip.
 
 - [ ] **Step 7: Commit**
 
@@ -234,12 +240,12 @@ describe('contracts', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run test/contracts/contracts.test.ts`
-Expected: FAIL — cannot find module `src/contracts/index.js`.
+Expected: FAIL: cannot find module `src/contracts/index.js`.
 
 - [ ] **Step 3: Write `src/contracts/index.ts`**
 
 ```ts
-// ---- verdict + evidence vocabulary (ground-truth §5; preview added per A-evclass) ----
+// ---- verdict + evidence vocabulary (ground-truth §5 plus the preview class) ----
 export type Severity = 'critical' | 'serious' | 'moderate' | 'minor';
 export type EvidenceClass = 'deterministic' | 'preview' | 'model-judgment' | 'human-confirmed';
 export type Verdict = 'verified' | 'regression' | 'not_covered' | 'approval_required';
@@ -260,7 +266,7 @@ export interface Draft {
   severity: Severity;
   evidenceClass: EvidenceClass;  // provenance taxonomy: only 'deterministic' (or promoted) mints
                                  //   the gate verdict; model-judgment/preview feed the judgment
-                                 //   assessment + conformance summary (decision-log 8.2)
+                                 //   assessment + conformance summary and never gate
   screenId: string;
   elementPath: string;
   elementName: string | null;
@@ -278,25 +284,36 @@ export interface Finding extends Draft {
 }
 
 // ---- announcement / transcript (voicing lane consumes these in Phase 4) ----
-export interface AnnouncementToken { kind: 'name' | 'role' | 'state'; text: string | null; fromTree: boolean; source: FactSource; }
+// kind 'live' = text that reached an armed live region after a step, captured from DOM
+// mutations rather than from the focused node. Toast and status announcements enter the
+// transcript only this way; fromTree is false and source is 'attribute' for live tokens.
+export interface AnnouncementToken { kind: 'name' | 'role' | 'state' | 'live'; text: string | null; fromTree: boolean; source: FactSource; }
 export interface TranscriptStop { index: number; elementPath: string; announcement: AnnouncementToken[]; }
-export interface ScreenScan { screenId: string; url: string; stops: TranscriptStop[]; drafts: Draft[]; }
+export interface ScreenScan {
+  screenId: string;
+  url: string;
+  stops: TranscriptStop[];
+  drafts: Draft[];
+  gaps: CoverageGap[];           // capability skips + scan failures for THIS screen; run() merges into coverage.gaps
+}
 
 // ---- coverage ----
 export interface AffectedScreen { screenId: string; url: string; provenance: 'route-graph' | 'wide-blast' | 'manual'; importChain?: string[]; }
 export interface CoverageGap {
-  ref: string;                                                    // surface id, url, or file path this gap concerns
+  ref: string;                                                    // surface id, url, provider id, or file path this gap concerns
   state: 'unresolved' | 'not-covered' | 'skipped' | 'capability-denied';
-  reason: string;                                                 // why it was not exercised; never empty (eqa-core: never report coverage that was not achieved)
+  reason: string;                                                 // why it was not exercised; never empty. Never report coverage that was not achieved.
 }
 export interface Coverage {
   changedFiles: string[];
   affected: AffectedScreen[];
   unresolvedFiles: string[];
-  gaps: CoverageGap[];           // each in-scope surface or check that could not be exercised, each with a reason (Phase 3 populates and consumes; Phase 1 leaves it [])
+  gaps: CoverageGap[];           // each in-scope surface or check that could not be exercised, each with a reason
   nothingToCheck: boolean;       // no UI-touching files; not a verdict
 }
-// Phase 1 note: the gate does not read coverage.gaps yet; it is a data channel that defaults to [] and is only counted by computeConformance. The gate's consumption of gaps is deferred to Phase 3.
+// The gate treats ANY gap as blocking from day one: gaps force not_covered exactly like
+// unresolvedFiles. Phase 1 gaps arrive via ScreenScan.gaps; the Phase 3 planner adds
+// discovery gaps of its own.
 
 // ---- receipt (ground-truth §5, §10) ----
 export interface Receipt {
@@ -311,14 +328,14 @@ export interface Receipt {
   verdict: 'verified';
   findingsSummary: { new: number; carried: number; fixed: number; unverified: number };
   activeWaivers: number;
-  signature?: string;            // slot only; OIDC signing is a clean seam (A8)
+  signature?: string;            // slot only; OIDC signing is a documented later seam
   mintedAt: string;
 }
 
 // ---- the whole serializable output ----
 export interface Result {
-  schemaVersion: 'usabl.result.v1';   // versioned contract; every projection echoes it (ta borrow)
-  verdict: Verdict | null;       // null iff coverage.nothingToCheck
+  schemaVersion: 'usabl.result.v1';   // versioned contract; every projection echoes it
+  verdict: Verdict | null;       // null when nothing to check, and on the disclosed error path (exitCode 4)
   summary: string;
   screens: ScreenScan[];
   coverage: Coverage;
@@ -329,10 +346,9 @@ export interface Result {
 }
 // exitCode: 0 verified or nothing-to-check; 1 regression; 2 approval_required;
 // 3 not_covered; 4 unhandled error (fail open with disclosure);
-// 5 RESERVED for the opt-in judgment soft-gate (off by default; Phase 3+; decision-log 8.2).
-//   The default install never emits 5; the deterministic gate stays exactly as above.
+// 5 reserved for a future opt-in advisory soft-gate. The default install never emits 5.
 
-// ---- conformance summary (Fork 1b): a NON-GATING projection of Result, never a single score ----
+// ---- conformance summary: a NON-GATING projection of Result, never a single score ----
 // Always shows every bucket side by side; never hides the not-evaluated denominator. The gate
 // verdict stays the authority; this is a read-only view for CI comments and the ACCESSIBILITY.md row.
 export interface ConformanceSummary {
@@ -343,7 +359,7 @@ export interface ConformanceSummary {
   notEvaluated: { unresolvedFiles: number; gaps: number };
 }
 
-// ---- evidence floor + waivers (A2, A3) ----
+// ---- evidence floor + waivers ----
 export interface FloorEntry {
   screenId: string;
   layer: string;                 // contest: 'axe' | 'pf' | 'walk'
@@ -365,7 +381,7 @@ export interface Waiver {
 }
 export interface WaiverLedger { version: 1; waivers: Waiver[]; }
 
-// ---- interaction contracts (Phase 4 consumes; frozen day 1 per A-contract) ----
+// ---- interaction contracts (Phase 4 consumes; frozen day 1) ----
 export interface Step { do: string; [key: string]: unknown; }
 export interface SpeechObligation {
   class: string;                 // promotion keys on this
@@ -409,8 +425,19 @@ export interface Page {
   focusBody(): Promise<void>;
   tab(): Promise<void>;
   press(key: string): Promise<void>;
+  click(selector: string): Promise<void>;
   activeNode(): Promise<AxNode | null>;
   activePath(): Promise<string>;
+  // Honest predicates for interaction rules: identity and containment of the
+  // focused element, computed in the page (never by comparing selector strings
+  // against DOM paths: those are different string spaces).
+  activeElementIs(selector: string): Promise<boolean>;
+  activeElementWithin(selector: string): Promise<boolean>;
+  // Live-region capture: arm installs a MutationObserver over [aria-live] and
+  // role=status/alert/log containers; drain returns and clears the text that
+  // reached them since the last drain. This is how toast announcements are observed.
+  armAnnouncementCapture(): Promise<void>;
+  drainAnnouncements(): Promise<string[]>;
   axAt(selector: string): Promise<AxNode | null>;
   queryAll(selector: string): Promise<ElementRef[]>;
   close(): Promise<void>;
@@ -420,12 +447,14 @@ export interface Page {
   getComputedStyle(selector: string, property: string): Promise<string>;
   screenshot(selector?: string): Promise<Buffer>;
 }
-export interface BrowserDriver { open(url: string): Promise<Page>; }
+// One warm browser per process: open() creates a fresh context + page; close()
+// disposes the shared browser at the end of the run.
+export interface BrowserDriver { open(url: string): Promise<Page>; close(): Promise<void>; }
 export interface GitReader {
   writeTree(): Promise<string>;
   show(ref: string, path: string): Promise<string | null>;
   statusZ(): Promise<Array<{ code: string; path: string }>>;
-  lsTree(ref: string, paths: string[]): Promise<Record<string, string>>;
+  lsFiles(ref: string, prefix: string): Promise<string[]>;   // files under prefix at ref; '' = all
   headRef(): Promise<string>;
 }
 export interface FsGlob { readFile(path: string): Promise<string | null>; glob(patterns: string[]): Promise<string[]>; }
@@ -449,7 +478,13 @@ export interface UsablConfig {
   surfaces: SurfaceConfig[];
   requirements?: string;
   guardedPaths: string[];
-  promotedObligations?: string[];   // empty by default (A-evclass)
+  promotedObligations?: string[];   // empty by default; populated only by offline calibration
+}
+
+// ---- run() options (optional third argument; two-argument calls keep working) ----
+export interface RunOptions {
+  changedFiles?: string[];       // override the change set (CI passes the PR diff); default = git status
+  trustedRef?: string | null;    // when set, floor/waivers (and in Phase 3 the guarded set) are read from this ref, never the working tree
 }
 
 // ---- gate I/O ----
@@ -514,7 +549,7 @@ describe('sortBy', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run test/primitives/sortKey.test.ts`
-Expected: FAIL — module not found.
+Expected: FAIL: module not found.
 
 - [ ] **Step 3: Write `src/primitives/sortKey.ts`**
 
@@ -585,7 +620,7 @@ describe('sha256 / canonicalHash', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run test/primitives/canonical.test.ts`
-Expected: FAIL — module not found.
+Expected: FAIL: module not found.
 
 - [ ] **Step 3: Write `src/primitives/canonical.ts`**
 
@@ -694,7 +729,7 @@ describe('computeIdentity', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run test/primitives/identity.test.ts`
-Expected: FAIL — module not found.
+Expected: FAIL: module not found.
 
 - [ ] **Step 3: Write `src/primitives/slug.ts`**
 
@@ -715,8 +750,12 @@ export function slug(text: string): string {
 import type { Draft, IdentityBasis } from '../contracts/index.js';
 import { slug } from './slug.js';
 
-/** Rules that assert "this element has no accessible name" — never keyable by name. */
-export const IDENTITY_WEAK = new Set<string>(['button-name', 'pf-icon-button-name']);
+/** Rules that assert "this element has no accessible name": never keyable by name. */
+export const IDENTITY_WEAK = new Set<string>([
+  'button-name',
+  'pf-icon-button-name',
+  'keyboard-walk-unnamed-interactive',
+]);
 
 /** Strip volatile positional detail from an elementPath into a stable structural token. */
 function neutralizePath(path: string): string {
@@ -773,7 +812,7 @@ import { describe, it, expect } from 'vitest';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
 import type { ScreenScan } from '../../src/contracts/index.js';
 
-const scan: ScreenScan = { screenId: 'clusters', url: 'http://x/clusters', stops: [], drafts: [] };
+const scan: ScreenScan = { screenId: 'clusters', url: 'http://x/clusters', stops: [], drafts: [], gaps: [] };
 
 describe('makeFakeDeps', () => {
   it('provides a fixed clock and version metadata', () => {
@@ -786,14 +825,14 @@ describe('makeFakeDeps', () => {
     const deps = makeFakeDeps({
       changed: [{ code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' }],
       files: { 'usabl.config.json': '{}' },
-      headBlobs: { 'usabl.config.json': 'sha-config' },
+      headContents: { 'usabl.config.json': '{}', 'src/gate/index.ts': 'X' },
       writeTree: 'tree-abc',
       scans: { clusters: scan },
     });
     expect(await deps.git.statusZ()).toEqual([{ code: 'M', path: 'fixtures/app/src/ClustersPage.tsx' }]);
     expect(await deps.git.writeTree()).toBe('tree-abc');
     expect(await deps.fs.readFile('usabl.config.json')).toBe('{}');
-    expect(await deps.git.lsTree('HEAD', ['usabl.config.json'])).toEqual({ 'usabl.config.json': 'sha-config' });
+    expect(await deps.git.lsFiles('HEAD', 'src/')).toEqual(['src/gate/index.ts']);
     expect(await deps.checkRunner.scan({ id: 'clusters', url: 'http://x/clusters' })).toEqual(scan);
   });
 });
@@ -802,7 +841,7 @@ describe('makeFakeDeps', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run test/deps/fakes.test.ts`
-Expected: FAIL — module not found.
+Expected: FAIL: module not found.
 
 - [ ] **Step 3: Write `src/deps/fakes.ts`**
 
@@ -815,8 +854,7 @@ export interface FakeDepsSpec {
   scannerVersions: { axeCore: string; playwright: string; chromium: string };
   changed: Array<{ code: string; path: string }>;
   files: Record<string, string>;          // working-tree contents by path
-  headContents: Record<string, string>;   // HEAD contents by path (for git.show)
-  headBlobs: Record<string, string>;       // blob shas by path (for git.lsTree / policyHash)
+  headContents: Record<string, string>;   // committed contents by path (git.show, lsFiles, policy hash)
   writeTree: string;                        // git write-tree result
   headRef: string;
   scans: Record<string, ScreenScan>;        // by screenId
@@ -829,7 +867,6 @@ const DEFAULTS: FakeDepsSpec = {
   changed: [],
   files: {},
   headContents: {},
-  headBlobs: {},
   writeTree: 'tree-0000',
   headRef: 'HEAD-0000',
   scans: {},
@@ -839,13 +876,18 @@ const notUsed = (name: string) => async (): Promise<never> => {
   throw new Error(`fake Page.${name} not used in this test`);
 };
 
-function fakePage(): Page {
+/** Complete in-memory Page. Override any member per test; never hand-roll Page literals. */
+export function makeFakePage(overrides: Partial<Page> = {}): Page {
   return {
     gotoReady: async () => {}, focusBody: async () => {}, tab: async () => {}, press: async () => {},
-    activeNode: async () => null, activePath: async () => 'body', axAt: async () => null,
-    queryAll: async () => [], close: async () => {},
+    click: async () => {},
+    activeNode: async () => null, activePath: async () => 'body',
+    activeElementIs: async () => false, activeElementWithin: async () => false,
+    armAnnouncementCapture: async () => {}, drainAnnouncements: async () => [],
+    axAt: async () => null, queryAll: async () => [], close: async () => {},
     setViewport: async () => {}, setZoom: async () => {}, setReducedMotion: async () => {},
     getComputedStyle: notUsed('getComputedStyle'), screenshot: notUsed('screenshot'),
+    ...overrides,
   };
 }
 
@@ -855,14 +897,13 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
     clock: () => spec.now,
     runnerVersion: spec.runnerVersion,
     scannerVersions: spec.scannerVersions,
-    browser: { open: async (_url: string) => fakePage() },
+    browser: { open: async (_url: string) => makeFakePage(), close: async () => {} },
     git: {
       writeTree: async () => spec.writeTree,
       show: async (_ref, path) => spec.headContents[path] ?? null,
       statusZ: async () => spec.changed,
-      lsTree: async (_ref, paths) => Object.fromEntries(
-        paths.filter((p) => p in spec.headBlobs).map((p) => [p, spec.headBlobs[p] as string]),
-      ),
+      lsFiles: async (_ref, prefix) =>
+        Object.keys(spec.headContents).filter((p) => p.startsWith(prefix)).sort(),
       headRef: async () => spec.headRef,
     },
     fs: {
@@ -870,7 +911,7 @@ export function makeFakeDeps(overrides: Partial<FakeDepsSpec> = {}): Deps {
       glob: async (patterns) => Object.keys(spec.files).filter((f) => patterns.some((p) => matchGlob(p, f))),
     },
     checkRunner: {
-      scan: async ({ id, url }) => spec.scans[id] ?? { screenId: id, url, stops: [], drafts: [] },
+      scan: async ({ id, url }) => spec.scans[id] ?? { screenId: id, url, stops: [], drafts: [], gaps: [] },
     },
   };
 }
@@ -900,7 +941,7 @@ git commit -m "feat: add in-memory Deps fakes for tests"
 
 ---
 
-## Task 7: Gate — evidence filter and verdict priority
+## Task 7: Gate: evidence filter and verdict priority
 
 **Files:**
 - Create: `src/gate/index.ts`
@@ -977,6 +1018,15 @@ describe('gate verdict', () => {
     expect(out.verdict).toBe('not_covered');
   });
 
+  it('returns not_covered when a coverage gap exists (capability denied)', () => {
+    const coverage: Coverage = { ...covered, gaps: [
+      { ref: 'provider:axe-core', state: 'capability-denied', reason: 'static mode: provider needs live' },
+    ] };
+    const out = gate({ ...base, coverage, drafts: [] });
+    expect(out.verdict).toBe('not_covered');
+    expect(out.exitCode).toBe(3);
+  });
+
   it('verifies when there are no gating problems', () => {
     const out = gate({ ...base, coverage: covered, drafts: [] });
     expect(out.verdict).toBe('verified');
@@ -988,7 +1038,7 @@ describe('gate verdict', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run test/gate/verdict.test.ts`
-Expected: FAIL — module not found.
+Expected: FAIL: module not found.
 
 - [ ] **Step 3: Write `src/gate/index.ts`**
 
@@ -1015,7 +1065,10 @@ export function gate(input: GateInput): GateOutput {
   // 4. Verdict is computed only from deterministic, still-active findings.
   const gating = findings.filter((f) => GATES(f.evidenceClass) && f.status !== 'waived' && f.status !== 'fixed');
   const hasNewFail = gating.some((f) => f.confidence === 'fail' && f.status === 'new');
-  const hasUnverified = gating.some((f) => f.confidence === 'unverified') || input.coverage.unresolvedFiles.length > 0;
+  const hasUnverified =
+    gating.some((f) => f.confidence === 'unverified') ||
+    input.coverage.unresolvedFiles.length > 0 ||
+    input.coverage.gaps.length > 0;   // any gap blocks: never verified on a partial scan
 
   if (hasNewFail) return { verdict: 'regression', findings, exitCode: 1, summary: verdictSummary('regression', gating) };
   if (hasUnverified) return { verdict: 'not_covered', findings, exitCode: 3, summary: verdictSummary('not_covered', gating) };
@@ -1043,7 +1096,7 @@ function verdictSummary(verdict: string, gating: Finding[]): string {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run test/gate/verdict.test.ts`
-Expected: PASS (all 7 cases).
+Expected: PASS (all 8 cases).
 
 - [ ] **Step 5: Commit**
 
@@ -1054,7 +1107,7 @@ git commit -m "feat: add gate verdict priority and evidence-class filter"
 
 ---
 
-## Task 8: Gate — identity differential and dedup
+## Task 8: Gate: identity differential and dedup
 
 **Files:**
 - Modify: `src/gate/index.ts` (replace `buildFindings`)
@@ -1062,8 +1115,21 @@ git commit -m "feat: add gate verdict priority and evidence-class filter"
 
 The evidence floor is the accepted deterministic finding set. New identity → `new`
 (regresses); identity already in the floor → `carried` (does not regress); floor entry
-with no current match → `fixed`. Dedup collapses the same defect across layers, keeping
-one Finding and preferring the PatternFly why/fix.
+with no current match → `fixed`. The floor accepts only `confidence: 'fail'` findings:
+an `unverified` finding can never be accepted into a floor; it must be resolved or the
+surface stays `not_covered`.
+
+Dedup has two mechanisms:
+
+1. **Identity dedup:** drafts sharing the layer-independent identity key collapse to one
+   Finding, preferring the PatternFly why/fix.
+2. **Equivalence suppression for identity-weak rules:** axe `button-name`,
+   `pf-icon-button-name`, and `keyboard-walk-unnamed-interactive` report the same defect
+   class (unnamed control) but can never share element keys, because unnamed elements
+   only have counts. For each (screen, equivalence class), keep ONLY the drafts from the
+   highest-priority layer that fired (pf > axe > walk) and drop the rest. One broken
+   kebab produces one finding, and the count ratchet stays stable because the floor
+   count always comes from a single layer.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1107,7 +1173,7 @@ describe('gate differential', () => {
     expect(out.verdict).toBe('verified');
   });
 
-  it('dedups the same defect across axe and pf, preferring the pf why/fix', () => {
+  it('dedups the same defect across layers by identity, preferring the pf why/fix', () => {
     const floor: EvidenceFloor = { version: 1, entries: [] };
     const axe = d({ layer: 'axe', why: 'axe why', fix: 'axe fix' });
     const pf = d({ layer: 'pf', why: 'pf why', fix: 'pf fix' });
@@ -1116,6 +1182,22 @@ describe('gate differential', () => {
     expect(kept).toHaveLength(1);
     expect(kept[0]!.why).toBe('pf why');
     expect(kept[0]!.fix).toBe('pf fix');
+  });
+
+  it('suppresses duplicate unnamed-control reports, keeping only the strongest layer', () => {
+    // One unnamed kebab fires axe button-name, pf-icon-button-name, AND the walk rule.
+    // Without suppression the fixture oracle would count one defect three times.
+    const floor: EvidenceFloor = { version: 1, entries: [] };
+    const drafts = [
+      d({ rule: 'button-name', layer: 'axe', evidence: {} }),
+      d({ rule: 'pf-icon-button-name', layer: 'pf', evidence: {} }),
+      d({ rule: 'keyboard-walk-unnamed-interactive', layer: 'walk', evidence: {} }),
+    ];
+    const out = gate({ ...base, floor, drafts });
+    const unnamed = out.findings.filter((f) => f.identityBasis === 'count' && f.status !== 'fixed');
+    expect(unnamed).toHaveLength(1);
+    expect(unnamed[0]!.layer).toBe('pf');
+    expect(out.verdict).toBe('regression'); // still one real new defect
   });
 
   it('regresses when a count-based rule increases over the floor', () => {
@@ -1140,7 +1222,7 @@ describe('gate differential', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run test/gate/differential.test.ts`
-Expected: FAIL — carried/fixed/dedup behavior not implemented.
+Expected: FAIL: carried/fixed/dedup behavior not implemented.
 
 - [ ] **Step 3: Replace `buildFindings` in `src/gate/index.ts`**
 
@@ -1156,17 +1238,48 @@ function preferLayer(a: Finding, b: Finding): Finding {
   return a;
 }
 
+/** Identity-weak rules that report the same defect class from different layers. */
+const RULE_EQUIV: Record<string, string> = {
+  'button-name': 'unnamed-control',
+  'pf-icon-button-name': 'unnamed-control',
+  'keyboard-walk-unnamed-interactive': 'unnamed-control',
+};
+const LAYER_PRIORITY: Record<string, number> = { pf: 0, axe: 1, walk: 2 };
+
+/**
+ * Equivalence suppression: unnamed elements cannot be keyed, so cross-layer duplicates
+ * of the same control are indistinguishable. For each (screen, equivalence class), keep
+ * only the drafts from the highest-priority layer that fired. This keeps the finding
+ * list and the count ratchet stable: the floor count always comes from one layer.
+ */
+function suppressEquivalents(findings: Finding[]): Finding[] {
+  const bestLayer = new Map<string, number>();
+  for (const f of findings) {
+    const cls = RULE_EQUIV[f.rule];
+    if (!cls || f.identityBasis !== 'count') continue;
+    const key = `${f.screenId}|${cls}`;
+    const rank = LAYER_PRIORITY[f.layer] ?? 9;
+    const cur = bestLayer.get(key);
+    if (cur === undefined || rank < cur) bestLayer.set(key, rank);
+  }
+  return findings.filter((f) => {
+    const cls = RULE_EQUIV[f.rule];
+    if (!cls || f.identityBasis !== 'count') return true;
+    return (LAYER_PRIORITY[f.layer] ?? 9) === bestLayer.get(`${f.screenId}|${cls}`);
+  });
+}
+
 /** Layer-independent key for cross-layer dedup and floor comparison. */
 function identityKey(f: { screenId: string; rule: string; elementKey: string | null }): string {
   return `${f.screenId}|${f.rule}|${f.elementKey ?? 'count'}`;
 }
 
 export function buildFindings(input: GateInput): Finding[] {
-  // 1. Draft -> Finding with identity.
-  const raw = input.drafts.map((draft: Draft): Finding => {
+  // 1. Draft -> Finding with identity, then suppress cross-layer equivalents.
+  const raw = suppressEquivalents(input.drafts.map((draft: Draft): Finding => {
     const { elementKey, identityBasis } = computeIdentity(draft);
     return { ...draft, elementKey, identityBasis, status: 'new' };
-  });
+  }));
 
   // 2. Dedup across layers by identity, preferring the pf why/fix.
   const byIdentity = new Map<string, Finding>();
@@ -1215,7 +1328,7 @@ export function buildFindings(input: GateInput): Finding[] {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run test/gate/differential.test.ts test/gate/verdict.test.ts`
-Expected: PASS (both files — Task 7 behavior still holds).
+Expected: PASS (both files: Task 7 behavior still holds).
 
 - [ ] **Step 5: Commit**
 
@@ -1226,7 +1339,7 @@ git commit -m "feat: add evidence-floor differential and cross-layer dedup"
 
 ---
 
-## Task 9: Gate — waivers
+## Task 9: Gate: waivers
 
 **Files:**
 - Modify: `src/gate/index.ts` (apply waivers inside `buildFindings`)
@@ -1284,7 +1397,7 @@ describe('gate waivers', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run test/gate/waivers.test.ts`
-Expected: FAIL — waivers not applied yet.
+Expected: FAIL: waivers not applied yet.
 
 - [ ] **Step 3: Add waiver application to `buildFindings`**
 
@@ -1335,8 +1448,10 @@ git commit -m "feat: apply active waivers in the gate"
 - Test: `test/guard/guard.test.ts`
 
 The local guard is tamper-evident (§10): each guarded path's working-tree content must
-match HEAD. Divergence → `approval_required`. (Session pinning, config-guards-itself
-ordering, and the CI `--trusted-ref` path are hardened in Phase 3.)
+match HEAD. Divergence → `approval_required`. Phase 1 handles FILE paths only; the
+sample config lists concrete files. Phase 3 hardens the guard: unconditional config
+self-guarding, directory expansion (so `src/gate` guards every file under it), session
+pinning, and the CI trusted-ref path.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1373,7 +1488,7 @@ describe('computeGuardDivergence', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run test/guard/guard.test.ts`
-Expected: FAIL — module not found.
+Expected: FAIL: module not found.
 
 - [ ] **Step 3: Write `src/guard/index.ts`**
 
@@ -1383,7 +1498,8 @@ import type { Deps } from '../contracts/index.js';
 /**
  * Local tamper-evident guard: a guarded path diverges when its working-tree content
  * does not exactly equal its HEAD content (including being absent from HEAD).
- * Config-guards-itself ordering and session pinning are added in Phase 3.
+ * FILE paths only here. Phase 3 adds unconditional config self-guarding, directory
+ * expansion, and session pinning; do not pass directory paths to this function.
  */
 export async function computeGuardDivergence(deps: Deps, guardedPaths: string[]): Promise<string[]> {
   const diverged: string[] = [];
@@ -1417,30 +1533,53 @@ git commit -m "feat: add minimal local tamper-evident guard"
 - Test: `test/evidence/receipt.test.ts`
 
 A receipt is minted only for a `verified` verdict, binding three hashes (§10): the
-working-tree hash (`git write-tree`), a `policyHash` over sorted guarded-path blob shas
-at HEAD, and the `runnerVersion`.
+working-tree hash (`git write-tree`), a `policyHash` over the guarded paths' committed
+contents, and the `runnerVersion`. `computePolicyHash` defined here is THE single policy
+hash in the product: sha256 over canonicalized, sorted `[path, sha256(committed content)]`
+pairs. Phase 3's `verifyReceipt` calls this same function with the same inputs; no second
+algorithm may exist. Phase 3 passes the expanded guarded set (directories resolved to
+files) by handing `mintReceipt` a config whose `guardedPaths` are already expanded.
 
 - [ ] **Step 1: Write the failing test**
 
 `test/evidence/receipt.test.ts`:
 ```ts
 import { describe, it, expect } from 'vitest';
-import { mintReceipt } from '../../src/evidence/receipt.js';
+import { mintReceipt, computePolicyHash } from '../../src/evidence/receipt.js';
 import { makeFakeDeps } from '../../src/deps/fakes.js';
-import { canonicalHash } from '../../src/primitives/canonical.js';
 import type { UsablConfig } from '../../src/contracts/index.js';
 
 const config: UsablConfig = {
   appBaseUrl: 'http://127.0.0.1:5173', uiFileGlobs: ['fixtures/app/src/**'],
   discovery: { routerFile: 'x', wideBlastGlobs: [] }, surfaces: [],
-  guardedPaths: ['usabl.config.json', 'src/gate'],
+  guardedPaths: ['usabl.config.json', 'src/gate/index.ts'],
 };
+
+describe('computePolicyHash', () => {
+  it('is deterministic and changes only when committed guarded content changes', async () => {
+    const deps1 = makeFakeDeps({ headContents: { 'usabl.config.json': 'cfg-v1', 'src/gate/index.ts': 'X' } });
+    const deps2 = makeFakeDeps({ headContents: { 'usabl.config.json': 'cfg-v2', 'src/gate/index.ts': 'X' } });
+    const a = await computePolicyHash(deps1, config.guardedPaths);
+    const b = await computePolicyHash(deps1, config.guardedPaths);
+    const c = await computePolicyHash(deps2, config.guardedPaths);
+    expect(a).toBe(b);
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect(a).not.toBe(c);
+  });
+
+  it('does not incorporate the source tree (the hashes stay separate)', async () => {
+    const deps1 = makeFakeDeps({ headContents: { 'usabl.config.json': 'cfg' }, writeTree: 'tree-1' });
+    const deps2 = makeFakeDeps({ headContents: { 'usabl.config.json': 'cfg' }, writeTree: 'tree-2' });
+    expect(await computePolicyHash(deps1, config.guardedPaths))
+      .toBe(await computePolicyHash(deps2, config.guardedPaths));
+  });
+});
 
 describe('mintReceipt', () => {
   it('binds source tree, policy hash, and runner version', async () => {
     const deps = makeFakeDeps({
       now: '2026-08-19T12:00:00.000Z', writeTree: 'tree-abc', runnerVersion: '0.0.0-test',
-      headBlobs: { 'usabl.config.json': 'blob-1', 'src/gate': 'blob-2' },
+      headContents: { 'usabl.config.json': 'cfg-v1', 'src/gate/index.ts': 'X' },
     });
     const receipt = await mintReceipt(deps, config, {
       surfaces: ['cli'], checked: ['clusters'], notCovered: [],
@@ -1450,7 +1589,7 @@ describe('mintReceipt', () => {
     expect(receipt.sourceTree).toBe('tree-abc');
     expect(receipt.runnerVersion).toBe('0.0.0-test');
     expect(receipt.mintedAt).toBe('2026-08-19T12:00:00.000Z');
-    expect(receipt.policyHash).toBe(canonicalHash([['src/gate', 'blob-2'], ['usabl.config.json', 'blob-1']]));
+    expect(receipt.policyHash).toBe(await computePolicyHash(deps, config.guardedPaths));
     expect(receipt.baseRevision).toBeNull();
   });
 });
@@ -1459,14 +1598,14 @@ describe('mintReceipt', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run test/evidence/receipt.test.ts`
-Expected: FAIL — module not found.
+Expected: FAIL: module not found.
 
 - [ ] **Step 3: Write `src/evidence/receipt.ts`**
 
 ```ts
 import type { Deps, Receipt, UsablConfig } from '../contracts/index.js';
 import { sortBy } from '../primitives/sortKey.js';
-import { canonicalHash } from '../primitives/canonical.js';
+import { canonicalHash, sha256 } from '../primitives/canonical.js';
 
 export interface ReceiptArgs {
   surfaces: string[];
@@ -1477,15 +1616,30 @@ export interface ReceiptArgs {
   baseRevision?: string | null;
 }
 
-/** policyHash: sha256 over sorted [path, blobSha] pairs of guarded paths at HEAD. */
-async function policyHash(deps: Deps, guardedPaths: string[]): Promise<string> {
-  const blobs = await deps.git.lsTree('HEAD', guardedPaths);
-  const pairs = sortBy(Object.entries(blobs), ([path]) => path);
-  return canonicalHash(pairs);
+/**
+ * THE policy hash: sha256 over canonicalized, sorted [path, sha256(committed content)]
+ * pairs. A path absent from the ref hashes the empty string. Minting and verification
+ * both call this function; no other policy hash definition exists anywhere.
+ */
+export async function computePolicyHash(
+  deps: Deps,
+  guardedPaths: string[],
+  ref = 'HEAD',
+): Promise<string> {
+  const pairs = await Promise.all(
+    guardedPaths.map(async (path) => {
+      const content = await deps.git.show(ref, path);
+      return [path, sha256(content ?? '')] as const;
+    }),
+  );
+  return canonicalHash(sortBy([...pairs], ([path]) => path));
 }
 
 export async function mintReceipt(deps: Deps, config: UsablConfig, args: ReceiptArgs): Promise<Receipt> {
-  const [sourceTree, policy] = await Promise.all([deps.git.writeTree(), policyHash(deps, config.guardedPaths)]);
+  const [sourceTree, policy] = await Promise.all([
+    deps.git.writeTree(),
+    computePolicyHash(deps, config.guardedPaths),
+  ]);
   return {
     schemaVersion: 1,
     sourceTree,
@@ -1550,7 +1704,7 @@ const failDraft: Draft = {
   whatUserExperiences: '', why: '', fix: '',
   evidence: { name: { value: 'Save', source: 'ax-tree', fromTree: true } }, confidence: 'fail',
 };
-const scanWith = (drafts: Draft[]): ScreenScan => ({ screenId: 'clusters', url: config.surfaces[0]!.url, stops: [], drafts });
+const scanWith = (drafts: Draft[]): ScreenScan => ({ screenId: 'clusters', url: config.surfaces[0]!.url, stops: [], drafts, gaps: [] });
 const guardOk = { files: { 'usabl.config.json': '{}' }, headContents: { 'usabl.config.json': '{}' } };
 
 describe('run', () => {
@@ -1607,13 +1761,13 @@ describe('run', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run test/run.test.ts`
-Expected: FAIL — module not found.
+Expected: FAIL: module not found.
 
 - [ ] **Step 3: Write `src/run.ts`**
 
 ```ts
 import type {
-  Coverage, Deps, EvidenceFloor, Finding, Result, ScreenScan, UsablConfig, Waiver, WaiverLedger,
+  Coverage, Deps, EvidenceFloor, Finding, Result, RunOptions, ScreenScan, UsablConfig, Waiver, WaiverLedger,
 } from './contracts/index.js';
 import { computeGuardDivergence } from './guard/index.js';
 import { gate } from './gate/index.js';
@@ -1642,29 +1796,42 @@ function computeCoverage(config: UsablConfig, changed: string[]): Coverage {
   return { changedFiles: changed, affected, unresolvedFiles, gaps: [], nothingToCheck: false };
 }
 
-async function readJson<T>(deps: Deps, path: string): Promise<T | null> {
-  const raw = await deps.fs.readFile(path);
+/**
+ * Policy files (floor, waivers) come from the working tree by default. When
+ * opts.trustedRef is set (the CI path), they are read from that ref instead, so a
+ * PR cannot influence the policy it is judged against.
+ */
+async function readPolicyJson<T>(deps: Deps, path: string, trustedRef: string | null): Promise<T | null> {
+  const raw = trustedRef !== null
+    ? await deps.git.show(trustedRef, path)
+    : await deps.fs.readFile(path);
   if (raw === null) return null;
   return JSON.parse(raw) as T;
 }
 
-export async function run(deps: Deps, config: UsablConfig): Promise<Result> {
+export async function run(deps: Deps, config: UsablConfig, opts: RunOptions = {}): Promise<Result> {
   try {
-    const changed = (await deps.git.statusZ()).map((c) => c.path);
-    const coverage = computeCoverage(config, changed);
+    const trustedRef = opts.trustedRef ?? null;
+    const changed = opts.changedFiles ?? (await deps.git.statusZ()).map((c) => c.path);
+    const baseCoverage = computeCoverage(config, changed);
     const guardDivergedPaths = await computeGuardDivergence(deps, config.guardedPaths);
 
     // Scan each affected surface fully (never sample).
     const screens: ScreenScan[] = [];
-    if (guardDivergedPaths.length === 0 && !coverage.nothingToCheck) {
-      for (const s of coverage.affected) {
+    if (guardDivergedPaths.length === 0 && !baseCoverage.nothingToCheck) {
+      for (const s of baseCoverage.affected) {
         screens.push(await deps.checkRunner.scan({ id: s.screenId, url: s.url }));
       }
     }
     const drafts = screens.flatMap((s) => s.drafts);
+    // Per-screen gaps (capability skips, scan failures) merge into coverage before the gate.
+    const coverage: Coverage = {
+      ...baseCoverage,
+      gaps: [...baseCoverage.gaps, ...screens.flatMap((s) => s.gaps)],
+    };
 
-    const floor = (await readJson<EvidenceFloor>(deps, '.usabl-evidence.json')) ?? EMPTY_FLOOR;
-    const ledger = await readJson<WaiverLedger>(deps, '.usabl-waivers.json');
+    const floor = (await readPolicyJson<EvidenceFloor>(deps, '.usabl-evidence.json', trustedRef)) ?? EMPTY_FLOOR;
+    const ledger = await readPolicyJson<WaiverLedger>(deps, '.usabl-waivers.json', trustedRef);
     const waivers: Waiver[] = ledger?.waivers ?? [];
 
     const gated = gate({ coverage, guardDivergedPaths, drafts, floor, waivers, now: deps.clock() });
@@ -1685,7 +1852,8 @@ export async function run(deps: Deps, config: UsablConfig): Promise<Result> {
       findings: gated.findings, receipt, dirtyGuardedPaths: guardDivergedPaths, exitCode: gated.exitCode,
     };
   } catch (err) {
-    // Fail open with disclosure (§9), never a silent pass.
+    // Fail open with disclosure (§9), never a silent pass. formatSummary renders
+    // exitCode 4 as an ERROR headline; verdict null here does NOT mean idle.
     return {
       schemaVersion: 'usabl.result.v1',
       verdict: null, summary: `unhandled error: ${(err as Error).message}`, screens: [],
@@ -1711,12 +1879,12 @@ function summarize(findings: Finding[]) {
 export * from './contracts/index.js';
 export { run } from './run.js';
 export { gate } from './gate/index.js';
-export { mintReceipt } from './evidence/receipt.js';
+export { mintReceipt, computePolicyHash } from './evidence/receipt.js';
 export { computeGuardDivergence } from './guard/index.js';
 export { computeIdentity, IDENTITY_WEAK } from './primitives/identity.js';
 export { canonicalize, sha256, canonicalHash } from './primitives/canonical.js';
 export { sortBy } from './primitives/sortKey.js';
-export { makeFakeDeps } from './deps/fakes.js';
+export { makeFakeDeps, makeFakePage } from './deps/fakes.js';
 export { formatSummary } from './output/summary.js';
 export { computeConformance } from './output/conformance.js';
 ```
@@ -1788,13 +1956,19 @@ describe('formatSummary', () => {
     expect(formatSummary(baseResult({ verdict: null, summary: 'nothing to check (no UI-touching files)' })))
       .toContain('nothing to check');
   });
+
+  it('renders an unhandled error distinctly, never as idle', () => {
+    const out = formatSummary(baseResult({ verdict: null, exitCode: 4, summary: 'unhandled error: boom' }));
+    expect(out).toContain('ERROR');
+    expect(out).not.toContain('IDLE');
+  });
 });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run test/output/summary.test.ts`
-Expected: FAIL — module not found.
+Expected: FAIL: module not found.
 
 - [ ] **Step 3: Write `src/output/summary.ts`**
 
@@ -1808,14 +1982,17 @@ const HEADLINE: Record<string, string> = {
 /** Pure projection of a Result to a human summary. Never re-derives findings. */
 export function formatSummary(result: Result): string {
   const lines: string[] = [];
-  const head = result.verdict === null ? 'IDLE' : HEADLINE[result.verdict] ?? result.verdict;
-  lines.push(`usabl: ${head} — ${result.summary}`);
+  // exitCode 4 is the disclosed fail-open path; it must never read as a calm idle.
+  const head = result.exitCode === 4
+    ? 'ERROR (fail open, disclosed)'
+    : result.verdict === null ? 'IDLE' : HEADLINE[result.verdict] ?? result.verdict;
+  lines.push(`usabl: ${head} - ${result.summary}`);
 
   const gating = result.findings.filter(
     (f) => f.evidenceClass === 'deterministic' && (f.status === 'new' || f.status === 'carried'),
   );
   for (const f of gating) {
-    lines.push(`  [${f.status}] ${f.screenId} · ${f.layer}/${f.rule} (${f.severity}) — ${f.whatUserExperiences}`);
+    lines.push(`  [${f.status}] ${f.screenId} · ${f.layer}/${f.rule} (${f.severity}): ${f.whatUserExperiences}`);
     if (f.fix) lines.push(`      fix: ${f.fix}`);
   }
   if (result.dirtyGuardedPaths.length > 0) {
@@ -1850,8 +2027,9 @@ async function buildDeps(_config: UsablConfig): Promise<Deps> {
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   const command = argv[0] ?? 'check';
   if (command !== 'check') {
+    // Usage errors are the error family (4), never 2: exit 2 means approval_required.
     process.stderr.write(`unknown command: ${command}\n`);
-    return 2;
+    return 4;
   }
   const config = await loadConfig();
   const deps = await buildDeps(config);
@@ -1975,7 +2153,7 @@ describe('computeConformance', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run test/output/conformance.test.ts`
-Expected: FAIL — module not found.
+Expected: FAIL: module not found.
 
 - [ ] **Step 3: Write `src/output/conformance.ts`**
 
@@ -2048,10 +2226,14 @@ fixed `writeTree`, the canonical `Result` is fully deterministic.
     { "id": "clusters", "url": "http://127.0.0.1:5173/clusters", "files": ["fixtures/app/src/ClustersPage.tsx"] }
   ],
   "requirements": "requirements/",
-  "guardedPaths": ["usabl.config.json", "src/gate", "src/guard", ".usabl-evidence.json", ".usabl-waivers.json"],
+  "guardedPaths": ["usabl.config.json", "src/gate/index.ts", "src/guard/index.ts", ".usabl-evidence.json", ".usabl-waivers.json"],
   "promotedObligations": []
 }
 ```
+
+Phase 1's minimal guard compares file paths only, so the sample lists concrete files.
+Phase 3 adds directory expansion and switches these entries to whole directories
+(`src/gate`, `src/guard`, `src/providers/rulepack`, `requirements/`).
 
 - [ ] **Step 2: Write the failing test**
 
@@ -2076,7 +2258,7 @@ const fail: Draft = {
   whatUserExperiences: 'Low contrast', why: 'ratio 2:1', fix: 'Raise to 4.5:1',
   evidence: { name: { value: 'Save', source: 'ax-tree', fromTree: true } }, confidence: 'fail',
 };
-const scan = (drafts: Draft[]): ScreenScan => ({ screenId: 'clusters', url: config.surfaces[0]!.url, stops: [], drafts });
+const scan = (drafts: Draft[]): ScreenScan => ({ screenId: 'clusters', url: config.surfaces[0]!.url, stops: [], drafts, gaps: [] });
 const guardOk = { files: { 'usabl.config.json': '{}' }, headContents: { 'usabl.config.json': '{}' }, writeTree: 'tree-fixed', now: '2026-08-19T00:00:00.000Z' };
 
 const scenarios: Record<string, () => ReturnType<typeof makeFakeDeps>> = {
@@ -2143,14 +2325,21 @@ git commit -m "test: pin canonical Result golden oracle for all verdicts"
 
 - **Spec coverage:** verdict priority, evidence-class filter, identity (name/structural/
   count), dedup preferring pf, evidence-floor ratchet, waivers with expiry, receipt three
-  hashes, idle vs not_covered, fail-open exit 4 — all mapped to tasks. Coverage discovery
+  hashes, idle vs not_covered, fail-open exit 4: all mapped to tasks. Coverage discovery
   (route graph), the real browser/git/CheckRunner Deps, and CI trusted-ref are explicitly
   deferred to Phases 2–3 and called out at their wiring points.
 - **Type consistency:** `GateInput`/`GateOutput`, `Finding.status`, `FloorEntry`,
   `Waiver`, `ReceiptArgs`, and `findingKey`/`identityKey` names are used identically across
   Tasks 7–12.
 - **Deferred-but-named:** `buildDeps()` in the CLI throws with a pointer to Phases 2–3
-  rather than pretending to work — honest, not a silent stub.
-- **Open reconciliation (not a blocker):** A3 wrote the floor layer as `'keyboard'`; this
-  plan uses `'walk'` per ground-truth §9 and keeps `layer: string`. Fold the corrected
-  value into `ground-truth.md` during the docs reconciliation (Task #6 of the session).
+  rather than pretending to work: honest, not a silent stub.
+- **Open reconciliation (not a blocker):** the decision log wrote the floor layer as
+  `'keyboard'`; this plan uses `'walk'` per ground-truth §9 and keeps `layer: string`.
+  Fold the corrected value into `ground-truth.md` during the docs reconciliation.
+- **2026-08-20 reconciliation applied:** gaps gate from day one (any `coverage.gaps`
+  entry forces `not_covered`); `computePolicyHash` is the single policy hash and is
+  exported; `run()` takes an optional `RunOptions` third argument (changedFiles override
+  + trustedRef policy reads) without breaking two-argument callers; equivalence
+  suppression collapses cross-layer unnamed-control duplicates; `makeFakePage` is the
+  only source of fake Pages; `GitReader.lsFiles` replaces `lsTree`; exitCode 4 renders
+  as an ERROR headline, never IDLE; unknown CLI commands exit 4, not 2.
