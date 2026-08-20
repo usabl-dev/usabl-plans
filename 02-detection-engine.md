@@ -6,6 +6,8 @@
 
 **Hard gate from Phase 1 security review:** `formatSummary` prints `whatUserExperiences` and `fix` to stdout with no neutralization. That is parked, not waived. Before this plan's CheckRunner can copy page text into Drafts, implement `neutralize()` and use it in `formatSummary` (and any other egress). Do not defer that to the surfaces plan. A live scan without it ships untrusted page text to the terminal.
 
+**PR map:** [`02-slices.md`](02-slices.md). Slice 0 is neutralize. Cut each later slice from current `main`. Do not stack.
+
 **Architecture:**
 - Providers return `Draft[]` only. No provider decides a verdict.
 - `CheckRunner` is the only thing that touches `BrowserDriver`; it satisfies `Deps.checkRunner` from Phase 1. `scan()` NEVER throws: a screen that cannot be scanned returns a `ScreenScan` whose `gaps` explain why. The gate turns any gap into `not_covered`.
