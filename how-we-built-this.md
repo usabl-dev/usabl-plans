@@ -14,7 +14,7 @@ Roles: [`roles.md`](roles.md). Plans: this directory. Product spec:
 
 Most accessibility tools scan and advise. A human may or may not read the list. AI
 assistants now write a large share of UI, and they are happy to call the work done
-while a screen reader still cannot use the screen.
+while the page still fails keyboard use, contrast, structure, or assistive tech.
 
 usabl is a **proof engine**. It checks the surfaces a change actually touched and
 returns one of four answers a person can trust: `verified`, `regression`,
@@ -46,7 +46,7 @@ We did not start in the compiler.
 2. **Ground truth.** One consolidated design replaced scattered shared-design /
    contest-plan / team-plan drafts. Architecture, four verdicts, evidence classes,
    receipts, guard/trust, surfaces, adoption, WCAG map, demo strategy. Author:
-   eparenti, August 2026. This is the product spec.
+   the founder, August 2026. This is the product spec.
 3. **Settled forks (2026-08-19).** A decisions file closed what ground truth still
    left open: NVDA as hero demo voice and Orca on Fedora as validation/dogfood
    reader; one npm package; Bash-only mid-task check for the contest (MCP is a
@@ -68,7 +68,7 @@ demo."
 
 ## How the team builds
 
-Founder (Ed) is chief of product and UX lead. Architect/CTO oversees and does not
+The founder is chief of product and UX lead. Architect/CTO oversees and does not
 write product code. This product is built with multiple models. Codex 5.3 implements
 (TDD, commit, report). Opus 4.6 is engineering manager and senior reviewer after each
 task. Gemini 3.1 pro is CISO: every PR vs `main` before merge, independent of Opus.
@@ -129,12 +129,32 @@ fixed the workflow.
 
 ---
 
+## What shipped after Phase 1 (through 2026-08-26)
+
+Phase 1 stayed the kernel table above. After that we did not stack. Each slice
+was cut from current `main`. The engine now runs a live check. The four Monday
+surfaces exist. The fixture is its own repo. Team preview is `v0.1.0`.
+
+| When | What became true |
+| --- | --- |
+| 2026-08-20 | Providers: neutralize, Provider interface, axe-core, PatternFly static rules. Pre-commit and gitleaks on every clone. `edited` on `pull_request` so retargeting re-runs CI. |
+| 2026-08-21 | Keyboard walk, dialog/menu probes, CheckRunner, live CDP browser, wired `usabl check`. Coverage planner maps changed UI files to screens or writes a gap. |
+| 2026-08-23 | Guard hardening and directory expansion. Receipts verified and wired into `run()`. Voicing preview (never mints `verified`). CLI projection, stop hook, receipt store, PR comment, engine CI gate, overlay, Playwright `assertUsablVerdict`, advisory self-check. |
+| 2026-08-24 | Intake: fail closed on bad bundles, map requirements to providers, bind docs artifacts to receipts. Hero-bug integration tests and a zero-finding fixed-variant oracle. Fleet Insights measurement harness (session files never committed). |
+| 2026-08-25 | Engine `v0.1.0` ([#52](https://github.com/usabl-dev/usabl/pull/52), [#53](https://github.com/usabl-dev/usabl/pull/53)): team-preview runbook, issue template, `usablVitePluginFromConfig` on `usabl/vite`, git tag `v0.1.0`. Fixture repo `usabl-app` [#1](https://github.com/usabl-dev/usabl-app/pull/1): `file:../usabl`, overlay in Vite. |
+| 2026-08-26 | `usabl-app` [#2](https://github.com/usabl-dev/usabl-app/pull/2): PR gate with `--ci --trusted-ref`, private clone of engine tag `v0.1.0`, root-owned `/opt` copy, sticky `<!-- usabl-report -->` comment. Secret `USABL_ENGINE_CHECKOUT_TOKEN` is founder bootstrap until usabl is an npm package. |
+
 ## What is not built yet (honest)
 
-Providers, real `CheckRunner`, route-graph coverage, directory-shaped guarded
-paths, CI trusted-ref, voicing lane, stop hook, overlay, MCP. `neutralize()` on
-CLI finding text is the first Phase 2 slice; until it lands, live scanning stays
-unwired. If a path is not built, it fails honestly or is not wired.
+MCP. `expect(page).toPassUsabl()` (the helper `assertUsablVerdict` exists; the
+one-liner does not). npm publish. CODEOWNERS and required checks (GitHub Free
+private cannot require the gate). Contest demo script. Query-string as the team
+ratchet. Dependabot alerts on `usabl-app`.
+
+The clone/token/symlink path in fixture CI is temporary. Later: `npm install
+usabl`. The `/opt` copy and `--trusted-ref` stay.
+
+If a path is not built, it fails honestly or is not wired.
 
 ---
 
@@ -166,3 +186,53 @@ Do not stack those PRs.
 Wrote [`quality-bar.md`](quality-bar.md). Long sessions forget coaching. Subagents
 start empty. CTO enforces: paste the bar every dispatch, never skip Opus or CISO,
 never self-approve a failed dispatch, experiments allowed, honesty not.
+
+### 2026-08-21 - Phase 2 live proof on main
+
+Three unstacked PRs from current `main`: remaining CLI neutralize (`#28`), CDP
+BrowserDriver (`#29`), then wired `usabl check` (`#30`). CISO medium on smoke
+stdout was fixed before `#29` merged. `buildDeps` no longer throws. Phase 2
+exit is real `Draft[]` from a live page, with stops and gaps. Next sprint is
+coverage / guard / trust, not more detection primitives.
+
+### 2026-08-21 - Phase 3 sprint opened
+
+Slice map: [`03-slices.md`](03-slices.md). Three unstacked PRs from current
+`main`: honest coverage (planner, not wired), hardened guard, then receipt
+trust plus `run()` wiring. Ask before each push. CISO on every PR.
+
+### 2026-08-23 - Surfaces and voicing on main
+
+Phases 4 and 5 landed as unstacked PRs: voicing preview that cannot mint
+`verified`, CLI `--ci --trusted-ref`, stop hook, PR comment, overlay, Playwright
+helper. The gate still decides. Overlay is a hint. Stop hook and CI can fail
+the work.
+
+### 2026-08-24 - Intake, docs binding, hero-bug oracle
+
+Requirements fail closed before scan. Content and flow map to deterministic
+providers. Docs artifacts bind to receipts. Integration tests flip the hero
+bug and prove the fixed fixture is a zero-finding oracle. Fleet Insights
+harness is measurement only.
+
+### 2026-08-25 - Team preview engine and fixture overlay
+
+Plan: [`08-team-demo.md`](08-team-demo.md). Engine version `0.1.0`, runbook,
+feedback issue template, `usablVitePluginFromConfig`. Tag `v0.1.0` pins CI.
+`usabl-app` is the PF6 fixture with `file:../usabl` and the overlay plugin.
+Teammates clone both as siblings until usabl is a package.
+
+### 2026-08-26 - Fixture PR gate is live
+
+`usabl-app` [#2](https://github.com/usabl-dev/usabl-app/pull/2) squash-merged.
+CI clones `usabl@v0.1.0` with `USABL_ENGINE_CHECKOUT_TOKEN` (name is `USABL`,
+not `USABLE`), copies it to `/opt` as root, runs `usabl check --ci
+--trusted-ref`, posts one sticky bot comment, fails closed on a missing exit
+code. First green run needed the secret on the fixture repo with the exact
+name. CISO High on "PR can replace the workflow file" stands; GitHub Free
+private cannot make the check required. The founder merged for team preview
+anyway. CODEOWNERS remains parked.
+
+A teammate can now clone, feel the modal bug, see the same answer on CLI,
+overlay, stop hook, and PR comment, and file feedback. The contest pitch is
+still not written.
