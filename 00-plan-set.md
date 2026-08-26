@@ -184,6 +184,15 @@ reporting; rendered DOM via Playwright storageState; no CI, no gating). Depends 
 prior phases and uses the Phase 1 contracts verbatim. **Exit criterion:** the
 broken→fixed loop is reproducible and the receipt re-verifies.
 
+### Phase 8: Strong team demo  →  `08-strong-team-demo.md`
+Expand the proven Phase 7 loop into one team demonstration across the real dev overlay,
+Claude mid-session check, stop hook, PR and CI, plus measurement-only Fleet Insights
+evidence. Replace the small overlay badge with an accessible inspector, add several
+supported accessibility scenarios to a realistic operations workflow, and keep preview
+controls separate from source-bound proof. **Exit criterion:** two operators can run and
+recover the full sequence, every local and GitHub surface agrees for the same source,
+and Fleet Insights findings and gaps have human-reviewed measurement evidence.
+
 ---
 
 ## Dependency graph

@@ -28,6 +28,7 @@ phases depend only on the frozen contracts of earlier ones, never on their inter
 | [`05-surfaces.md`](05-surfaces.md) | Phase 5: CLI, stop hook, CI/PR comment, dev overlay, Playwright helper |
 | [`06-intake-and-docs.md`](06-intake-and-docs.md) | Phase 6: requirement intake and accessible docs output |
 | [`07-demo-and-measurement.md`](07-demo-and-measurement.md) | Phase 7: demo fixture flip and real-app measurement |
+| [`08-strong-team-demo.md`](08-strong-team-demo.md) | Phase 8: multi-scenario fixture, accessibility inspector, Claude, CI, and Fleet Insights demo |
 
 ## How to execute a plan
 
