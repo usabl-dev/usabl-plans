@@ -100,4 +100,55 @@ Landed on top of v0.1.0 before this finish began:
   control characters in the shared neutralizer, and a symmetric added-route
   caveat. Both fail in the safe direction, so neither blocks the honesty bar.
 
+- A3 (install family plus stop-hook, slices 6a through 6d) landed as usabl#91,
+  one cohesive PR carrying four generators and a new subcommand. The builder
+  landed the family first: `usabl install --overlay|--claude|--ci|--branch-rule`,
+  each writing a draft only and refusing with a manual step on ambiguous input,
+  plus `usabl stop-hook`, a thin stdin reader that always exits 0 so a wedged
+  hook can never block continuation through an exit code. The engineer verified
+  the build independently (full check green, diff scope correct, the four core
+  guards mutation-proven) before routing it to review.
+- The slice carried five review lanes at once, one per integration plus a
+  whole-slice reviewer. The CI lane returned resolved on the first pass: it
+  reconstructed the emitted gate workflow and confirmed it is byte-faithful to
+  the fixture, with all of the security properties intact (fork-secret fence,
+  trusted-read policy job, SHA-pinned actions, the numeric pull-request guard,
+  the read-only engine snapshot, and a documented sentinel in place of a
+  fabricated engine commit). The other four returned concerns, and three of them
+  were the same shape: a confident wrong success. Recognition that failed toward
+  success was the common root. The overlay wiring check scanned raw text, so a
+  commented-out plugin read as already wired. The Claude hook ownership check
+  used a substring match, so an operator command that merely mentioned the marker
+  (a wrapped or foreign command) was rewritten in place and reported as a
+  success while the operator's real command was lost. The branch-rule check
+  treated any 404 as proof of no protection, so a permission or wrong-repo 404
+  became a fabricated not-applied. The reviewer added test-coverage gaps: the
+  glue that routes a target to its generator, and the ordering that lets
+  `install --ci` write a workflow rather than trip the check-mode trusted-ref
+  requirement, were both correct but unlocked by any test.
+- All findings went back to the builder as one consolidated rework. The fix in
+  every honesty case was to narrow recognition to exact, anchored, positively
+  confirmed forms and let everything else fall to the safe direction: refuse or
+  cannot-verify. The overlay check now runs on a string-aware scrubbed copy so a
+  commented-out or quoted mention cannot count. Claude ownership is now an exact
+  or anchored match, and a wrapped, prefixed, piped, or foreign command refuses
+  with the file left byte-for-byte unchanged; a second usabl hook now refuses
+  rather than hide a double-run. Branch-rule recognizes absence only by GitHub's
+  exact "Branch not protected" signal, and its gh reader was narrowed to a
+  read-only getJson port so no caller path can turn it into a write. A shared
+  correctness gap, missing the .cts and .cjs Vite config forms, was fixed in
+  both the overlay and init candidate lists so a config in those forms is no
+  longer shadowed by a fresh draft.
+- The engineer re-verified the rework independently, mutation-testing each of the
+  three tightened honesty guards: breaking a guard flipped exactly its own tests
+  red and nothing else, proving the tests load-bearing. All five lanes then
+  returned resolved, the whole-slice reviewer re-derived the load-bearing checks
+  itself rather than take the claim on faith, and CI was green. Final state: 549
+  tests passing, install suite at 49, full check green. Two tidies were cleared
+  to ship by the lanes and tracked as their own low-priority follow-ups rather
+  than spun into another cycle: a path-segment boundary on the retired-hook
+  regex, and a multi-line-import form for the overlay wiring check. Both fail in
+  the safe direction (over-refuse, never a false success), so neither blocks the
+  honesty bar.
+
 (append entries as work lands)
