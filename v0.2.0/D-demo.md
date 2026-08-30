@@ -67,6 +67,57 @@ the human onboarding proof (H1).
 Capture: the command transcript, the timing, and the resulting doctor output.
 Label it agent-run, not human-confirmed.
 
+### Verified run, 2026-08-30
+
+Run as a background agent from fresh clones of both repositories, then
+independently re-read by the finishing engineer against the raw command outputs.
+It is agent-run, not human-confirmed.
+
+The clones landed on the exact frozen commits: engine `51a9ce3` and fixture
+`1c2404f`, both matching the expected heads. The fixture consumes the engine
+through `"usabl": "file:../usabl"`, and after `npm ci` the `node_modules/usabl`
+symlink resolved so `npx usabl` ran the frozen engine.
+
+Timing against the under-30-minutes north star: prepare (two `npm ci` runs, the
+engine build, and a warm-cache Playwright install) took 57 seconds; the
+eight-command onboarding walk took 52 seconds; total 109 seconds, about 1.8
+minutes, leaving roughly 28 minutes of headroom. One caveat: the Playwright
+install finished in 4 seconds on a warm cache and did no real download, though it
+printed an unsupported-OS notice. A cold-cache machine would add download time to
+prepare.
+
+The eight-command walk, with each exit code:
+
+- `usabl init` exit 2: refused to overwrite the existing config and route
+  manifest without `--force`, attributed all four routes, and flagged three
+  drafts for review.
+- `usabl baseline` exit 0: wrote zero floor entries as a draft to review and
+  merge.
+- `usabl install --overlay` exit 0: already wired, no change.
+- `usabl install --claude` exit 0: updated the live `.claude/settings.json` to
+  run the Stop hook, with a note to review the diff before committing.
+- `usabl install --ci` exit 2: refused to overwrite the hand-tuned security
+  workflow, which differs from the draft at line 40, and asked for a manual
+  reconcile.
+- `usabl install --branch-rule` exit 2: reported not applied, because branch
+  protection cannot be set from the CLI, and printed the exact GitHub setting for
+  a human to apply.
+- `usabl doctor` exit 0: seven wired, one missing (branch protection), zero
+  drifted, zero unknown, and restated that doctor mints no verdict.
+- `usabl check` exit 2: approval required, because `baseline` had dirtied the
+  guarded `.usabl-evidence.json`; accessibility itself was idle with no
+  UI-touching diff.
+
+Only two files ended modified: `.claude/settings.json` and
+`.usabl-evidence.json`. Every non-zero exit is an honest refusal or verdict in
+the safe direction, not a crash. The four exit-2 results are the honesty design
+made visible: usabl will not clobber hand-tuned config, will not claim a GitHub
+setting it cannot make, and the diff-aware gate asks for approval when a guarded
+path changes rather than minting a green. Eleven refusals or manual steps were
+captured for the H1 script, two of them hard human-required limits: reconcile the
+CI workflow by hand, and set branch protection in the GitHub UI. Artifacts are in
+the finishing engineer's evidence directory and feed E-release.md.
+
 ## D3, green suites
 
 Verified 2026-08-30.

@@ -363,9 +363,20 @@ Landed on top of v0.1.0 before this finish began:
   fixture suite and report a phantom failure on an old engine pin. Gitignore
   hides a path from git, not from the test runner. Removing the worktree restored
   the pristine counts.
-- D2, the clean-clone onboarding proxy, is running as an agent proxy against
-  fresh clones of both repositories from their remotes, timed against the
-  under-30-minutes north star. Its transcript, timing, and doctor output feed the
-  evidence bundle in E.
+- D2, the clean-clone onboarding proxy, passed. It ran as a background agent from
+  fresh clones of both repositories, which landed on the exact frozen commits, and
+  the finishing engineer then re-read the raw command outputs to confirm the
+  report. The full walk, prepare plus eight onboarding commands, took 109 seconds,
+  about 1.8 minutes, well under the 30-minute north star. Four of the eight
+  commands exited non-zero, and every one is an honest refusal or verdict in the
+  safe direction rather than a crash: init refused to overwrite existing config
+  without force, install --ci refused to clobber a hand-tuned security workflow,
+  install --branch-rule reported it cannot set GitHub branch protection from the
+  CLI and printed the exact setting instead, and check asked for approval because
+  baseline had dirtied the guarded evidence ledger. Doctor reported seven wired
+  and one missing, the branch protection, and restated that it mints no verdict.
+  Only two files ended modified. Eleven refusals or manual steps were captured for
+  the human onboarding script, two of them hard human-required limits. The result
+  is labelled agent-run, not human-confirmed, and feeds the evidence bundle in E.
 
 (append entries as work lands)
