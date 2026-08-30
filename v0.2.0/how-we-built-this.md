@@ -151,4 +151,46 @@ Landed on top of v0.1.0 before this finish began:
   the safe direction (over-refuse, never a false success), so neither blocks the
   honesty bar.
 
+- A4 (doctor, slice 7) landed as usabl#92, a read-only `usabl doctor` that
+  projects eight integration surfaces as wired, missing, drifted, or unknown,
+  each with one honest next step. It mints no verdict and always exits 0 when it
+  renders, so it never becomes a second verdict authority, and unknown is a
+  first-class state for a surface usabl cannot positively confirm. The builder
+  reused the install family's recognition predicates rather than re-derive
+  weaker checks. The engineer verified the first build independently and, before
+  routing it to review, found two honesty inversions the reuse had carried in.
+- The first was a confident wrong success on the ci surface. Doctor drove off
+  planCi's byte-exact already-wired, but the draft workflow ships with the
+  engine ref still set to the placeholder sentinel, so a gate that cannot run
+  read as wired while a correctly pinned gate read as drifted. The fix was a new
+  pin-aware recognizer, classifyGateWorkflow, added next to the draft it checks:
+  wired requires both engine-ref lines to carry the same real 40-character
+  commit SHA, the sentinel is unpinned (doctor renders it drifted with a pin
+  step), and any structural change or inconsistent pin is drifted. The second
+  was a conflation on the stop-hook surface. The install plan's single update
+  action covered both a settings file with no usabl hook at all and a usabl hook
+  that only needed normalizing, and doctor called both drifted with a false
+  claim about a retired path. The fix added an UpdateReason discriminator so
+  doctor tells the genuinely missing surface from the drifted one. Both changes
+  are additive: planCi, writeCi, and writeClaude are byte-unchanged, so the
+  merged install family behaves exactly as before.
+- The reviewer and the security lane re-derived the fixes independently against
+  the reworked commit. The security lane recorded, for the record, that its
+  first pass had accepted planCi's byte-exact already-wired as honest and missed
+  the sentinel embedded in the draft; on re-derivation it ran crafted-workflow
+  attempts (sentinel intact, half-pinned, a real SHA beside a tampered security
+  line, trailing content on a ref line, uppercase hex) and confirmed every one
+  falls to not-wired, so no repo state reports an unenforceable gate as green.
+  The engineer mutation-tested both new guards: breaking the SHA recognizer
+  flips only the real-SHA-to-wired tests, and forcing the stop-hook reason to
+  normalize flips only the settings-exists-no-hook test while the install suite
+  stays green, proving the new field read-only. Final state: 583 tests, full
+  check green. This completes the seven adoption slices (4b, 5, 6a through 6d,
+  7). Two residuals are tracked as their own low-priority follow-ups rather than
+  spun into another cycle: the unpinned next step's reference to install --ci,
+  which does not itself reprint the pin steps for an existing unpinned draft, and
+  a guard-test for classifyGateWorkflow's coupling to the draft literally
+  carrying the sentinel. Both fail in the safe direction, so neither blocks the
+  honesty bar.
+
 (append entries as work lands)
