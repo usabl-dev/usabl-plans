@@ -393,14 +393,30 @@ Landed on top of v0.1.0 before this finish began:
   note, the D2 onboarding transcript and timing, the oracle RED and GREEN links,
   and the current green gate on both repos. The final usabl-app gate link is
   honestly marked pending B3, the guarded CI re-pin.
-- E3, preserving the v0.3.0 verifier plan, is held. Committing the doc into the
-  plans repo was declined by the workspace safety guard as reversing the standing
-  preference to keep specs and plans out of shared repositories. The doc stays
-  untracked and preserved locally; the v0.3.0 issue is drafted and waits on
-  explicit approval.
-- Remaining before the tag, all requiring explicit approval: B3, the guarded CI
-  re-pin to the frozen engine commit, and E2, the tag on both repos. E4, the
-  package-distribution recommendation, is unchanged: keep the private
+- E3, preserving the v0.3.0 verifier plan, is done in the safe direction. The
+  tracking issue is filed as usabl-dev/usabl#96, labelled v0.3.0 and future,
+  recording all six mechanisms, the voicing-lane wiring, and the engine's
+  non-negotiables. The `09-verifier` doc itself stays untracked and preserved
+  locally: committing it into the shared repo was declined as reversing the
+  standing preference to keep specs and plans out of shared code repositories, so
+  the issue carries the scope instead of the file.
+- B3, the guarded CI re-pin, is built and verified but blocked by usabl's own
+  guarded-path control, which is the honest outcome. The change is exactly three
+  engine-SHA occurrences, from the old pin to the frozen v0.2.0 commit
+  51a9ce3: two in the gate workflow and the duplicated pin in the demo-wiring
+  test. The finishing engineer read the diff and confirmed only those three
+  lines; the security lane returned clean. Continuous integration then ran the
+  gate, which reported the accessibility surface idle, no UI-touching diff, and
+  correctly returned approval-required because the change edits a guarded path.
+  The gate requires a code-owner review of the head from someone other than the
+  pull-request author. The sole code owner is also the author, and a code owner
+  cannot approve their own pull request, so the merge cannot clear the gate
+  without a deliberate human decision on how to satisfy the two-person control.
+  This is the security model proving itself on the release critical path, not a
+  defect. It is surfaced for a human decision rather than forced green.
+- Remaining before the tag: unblock B3 by a human decision on the two-person
+  control, then E2, the tag on both repos, which also requires explicit approval.
+  E4, the package-distribution recommendation, is unchanged: keep the private
   pinned-checkout for v0.2.0 and defer npm publish to a human task.
 
 (append entries as work lands)

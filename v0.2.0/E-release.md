@@ -48,12 +48,13 @@ approval.
 
 ### Status, 2026-08-30
 
-Held. Committing 09-verifier into the plans repo was declined by the workspace
-safety guard as reversing the standing preference to keep specs and plans out of
-shared repositories, together with the earlier decision to leave this doc
-untracked and file it as an issue instead. The doc remains untracked and
-preserved locally. The v0.3.0 issue is drafted and waits on explicit approval,
-alongside B3 and the tag.
+Done, in the safe direction. The v0.3.0 tracking issue is filed as
+usabl-dev/usabl#96, titled "v0.3.0: verifier evidence and measured outcomes",
+labelled v0.3.0 and future. It records all six mechanisms and the voicing-lane
+wiring, and carries the engine's non-negotiables. The `09-verifier` plan doc
+stays untracked and preserved locally: committing it into the shared repo was
+declined as reversing the standing preference to keep specs and plans out of
+shared code repositories, so the issue preserves the scope instead of the file.
 
 ## E4, package distribution note (Item 6)
 
