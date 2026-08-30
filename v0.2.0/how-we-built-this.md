@@ -333,4 +333,39 @@ Landed on top of v0.1.0 before this finish began:
   hero rehearsal and clean-clone proxy (D), the pull-request dispositions (B2),
   the guarded CI re-pin (B3), and the evidence bundle (E).
 
+## D, demo readiness (2026-08-30)
+
+- D1, the hero loop, was run end to end against the fixture and captured on all
+  four surfaces. To produce a genuine verified verdict rather than an idle
+  no-diff result, the loop followed the runbook shape: commit the broken source
+  on a throwaway branch so the base is broken, then repair the working tree so
+  the diff-aware gate sees a real repair. Broken source returned regression, exit
+  1, eight gating findings on the two screens the change reaches through the route
+  graph; repaired source returned verified, exit 0, zero findings, with a receipt
+  bound to source tree, policy hash, runner version, and scanner stack. The CLI,
+  the overlay result endpoint, the pull-request comment, and the stop hook all
+  agreed on both states, including the identical receipt sourceTree hash on every
+  surface that carries one. The stop hook blocked on regression through a stdout
+  decision and allowed on verified with the receipt disclosed on stderr, both at
+  exit 0, which matches the fail-open contract documented in C3.
+- The run corrected two predictions in the D plan, both in the safe direction.
+  The regression exit code is 1, not 2. The predicted pf-toast-live-region
+  finding does not appear, and correctly so: a toast enters the DOM only after a
+  click, and the rule short-circuits on an empty alert set and proves containment
+  only, refusing the temporal announcement half. An absent alert is silence, not
+  a false finding. The plan was updated to the verified results.
+- D3, the green suites, passed. The engine check is green: 588 tests pass and 7
+  skip across 92 files, then typecheck, build, DTS, and the package smoke all
+  pass, exit 0. The seven skips are the live integration tests skipped by
+  default. The fixture is green: 21 tests across 8 files, typecheck and lint
+  clean. One honesty note worth keeping: a leftover git worktree under the
+  gitignored .work directory made vitest discover a stale second copy of the
+  fixture suite and report a phantom failure on an old engine pin. Gitignore
+  hides a path from git, not from the test runner. Removing the worktree restored
+  the pristine counts.
+- D2, the clean-clone onboarding proxy, is running as an agent proxy against
+  fresh clones of both repositories from their remotes, timed against the
+  under-30-minutes north star. Its transcript, timing, and doctor output feed the
+  evidence bundle in E.
+
 (append entries as work lands)
