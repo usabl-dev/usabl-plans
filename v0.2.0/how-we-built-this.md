@@ -58,4 +58,27 @@ Landed on top of v0.1.0 before this finish began:
   the PatternFly rulepack rather than the voicing lane.
 - Recorded the v0.2.0 build method above.
 
+### 2026-08-30
+
+- A1 (floor-notice, slice 4b) merged as usabl#89. The builder-reviewer loop
+  rejected an early build that reported floor pay-down it had not confirmed, then
+  landed a gap-guarded version whose honesty test was proven load-bearing by a
+  mutation check (removing the guard flips the count and fails the test).
+- usabl-app dispositions: confirmed B1 (demo-wiring pin) already merged as #22,
+  merged #21 (gitignore for agent work dirs and secrets), and synced main. The
+  #20 and #17 rehearsal PRs stay open until the hero rehearsal and evidence
+  bundle exist, so their closes can cite real evidence rather than a claim.
+- A2 (routes drift, slice 5) went through the full loop. The builder landed the
+  URL-only comparison and, after a first review, the exit-code disclosure
+  contract as a tested outcome function. The independent reviewer then blocked on
+  a real honesty gap: a readable router the fallback regex cannot parse (for
+  example React Router's data-router API, which uses a path object key) yields
+  zero discovered routes, and the command reported every configured route as
+  removed at exit 1 rather than refusing. The security lane separately found that
+  file-derived URLs were printed to stdout without the codebase's egress
+  neutralizer, which a crafted router path could use to spoof a clean report in
+  CI logs. Both went back to the builder as one consolidated rework: refuse with
+  a manual step when discovery is empty, make an unreadable router refuse rather
+  than crash, and neutralize printed URLs.
+
 (append entries as work lands)
