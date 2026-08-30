@@ -285,4 +285,52 @@ Landed on top of v0.1.0 before this finish began:
   the entry is findable rather than shipped as a known drift. Final state: full
   check green in CI, docs:linkcheck green.
 
+- C3 (READMEs, CONTRIBUTING, and guides to v0.2.0) landed as two PRs, usabl#95
+  and usabl-app#23. The engine repo gained a README "Command surface" section
+  that lists every command the CLI registers, grouped by role and framed so the
+  reader knows only the gate decides a verdict. CONTRIBUTING's build process was
+  rewritten from a stale vendor-specific description (it named particular model
+  families) into three vendor-neutral lanes: implement, review, and security
+  review, with the rule that the lane which writes a change does not review it or
+  own the merge security gate. The contribution guide and the how-usabl-works
+  page now name usabl baseline and usabl floor prune as draft-writing floor
+  commands that mint no verdict. The team fixture's runbook gained an "Adopt
+  usabl in your own repository" section covering the same adoption and lifecycle
+  commands, so a teammate can wire usabl into their own repo, not only drive the
+  fixture.
+- The engineer verified the first build independently and made two corrections
+  the builder had honestly flagged or missed. The README command list omitted
+  usabl docs, the twelfth command, so the list did not match the CLI; it was
+  added under a Reporting heading as a generator that projects artifacts and
+  mints no verdict. The stop-hook entry described the command as a thin stdin
+  reader that always exits 0, which inverted its purpose: usabl stop-hook runs
+  the gate when the assistant tries to finish and blocks continuation through the
+  Stop hook decision, and the exit-0 property exists so a wedged or errored hook
+  fails open with disclosure rather than blocking through an exit code. Both the
+  engine README and the runbook were corrected to say the command is the gate for
+  continuation, not a passthrough.
+- Two lanes reviewed without pre-shared findings, one for content, honesty, and
+  page accessibility, one for security. The security lane returned clean: both
+  changes are documentation only, touch no guarded path, add no script or network
+  resource, leave the how-usabl-works Content-Security-Policy intact, introduce no
+  secret, and add no link to the private plans repo. The content lane verified
+  every one of the twelve command descriptions against the engine source rather
+  than the CHANGELOG, confirmed the command list is complete, confirmed the
+  CONTRIBUTING rewrite names no vendor, and confirmed the CSP, heading levels, and
+  style. It found one nit, in the safe direction: the corrected stop-hook wording
+  narrowed the block condition to an unresolved regression, while the engine
+  blocks on three verdicts (regression, not covered, and approval required) plus
+  guarded policy drift detected within the session. The wording was broadened to
+  match, verified against the BLOCKING_VERDICTS set in stop-hook.ts and the
+  session-drift path in stop-hook-runner.ts. This nit is itself an instance of the
+  slice's own discipline: a doc that understated an enforcement surface was
+  corrected to match the code.
+- Final state: usabl#95 full check green in CI and locally, docs:linkcheck green
+  (74 relative links, zero broken, the four pre-existing cross-repo research
+  escapes unchanged); usabl-app#23 gate-comment and policy checks green. Both
+  squash-merged. This completes the documentation handoff for v0.2.0 except the
+  ground-truth reconciliation already covered in C1. Remaining before the tag: the
+  hero rehearsal and clean-clone proxy (D), the pull-request dispositions (B2),
+  the guarded CI re-pin (B3), and the evidence bundle (E).
+
 (append entries as work lands)

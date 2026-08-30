@@ -94,7 +94,7 @@ Everything else is pre-authorized and reviewed as it opens.
 | A4 | usabl | slice 7 `usabl doctor` | no | merged (#92) |
 | C1 | usabl | Item 5 docs truth pass + CHANGELOG | no | merged (#93) |
 | C2 | (docs site) | team-orientation + guides to v0.2.0 | no | merged (#94) |
-| C3 | usabl, usabl-app | READMEs + CONTRIBUTING to v0.2.0 | no | not started |
+| C3 | usabl, usabl-app | READMEs + CONTRIBUTING to v0.2.0 | no | merged (#95, #23) |
 | B2 | usabl-app | merge #21 gitignore; close #20 and #17 with evidence | no | not started |
 | B3 | usabl-app | re-pin CI to the frozen engine commit | yes (workflows) | not started |
 | TAG | both | tag v0.2.0 | yes (tag) | not started |
