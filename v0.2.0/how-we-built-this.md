@@ -379,4 +379,28 @@ Landed on top of v0.1.0 before this finish began:
   the human onboarding script, two of them hard human-required limits. The result
   is labelled agent-run, not human-confirmed, and feeds the evidence bundle in E.
 
+## B2 and E, dispositions and evidence (2026-08-30)
+
+- B2, the pull-request dispositions, is done. #21, the gitignore change, was
+  already merged. #20, the disposable oracle proof, was closed with its RED and
+  GREEN run links recorded on the PR: the usabl-gate workflow concluded failure
+  on the broken commit 5f88943 and success on the repaired commit 2a9a5df, both
+  verified against the pinned engine. #17, the hero-loop rehearsal, was closed as
+  superseded by the D1 four-surface capture, with that evidence recorded on the
+  PR.
+- E1, the evidence bundle, is assembled in one place, out of git, with an index.
+  It collects the broken and repaired Result JSON, the four-surface agreement
+  note, the D2 onboarding transcript and timing, the oracle RED and GREEN links,
+  and the current green gate on both repos. The final usabl-app gate link is
+  honestly marked pending B3, the guarded CI re-pin.
+- E3, preserving the v0.3.0 verifier plan, is held. Committing the doc into the
+  plans repo was declined by the workspace safety guard as reversing the standing
+  preference to keep specs and plans out of shared repositories. The doc stays
+  untracked and preserved locally; the v0.3.0 issue is drafted and waits on
+  explicit approval.
+- Remaining before the tag, all requiring explicit approval: B3, the guarded CI
+  re-pin to the frozen engine commit, and E2, the tag on both repos. E4, the
+  package-distribution recommendation, is unchanged: keep the private
+  pinned-checkout for v0.2.0 and defer npm publish to a human task.
+
 (append entries as work lands)

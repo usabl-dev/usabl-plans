@@ -14,6 +14,16 @@ Private evidence stays out of git. If any artifact needs to live in a repo, it
 is scrubbed first and only with explicit approval. Fleet Insights is measurement
 only, no verdict, no receipt.
 
+### Status, 2026-08-30
+
+The evidence bundle is assembled in one place, out of git, in the finishing
+engineer's scratch area, with an index. It collects the broken and repaired
+Result JSON, the four-surface agreement note, the D2 onboarding transcript and
+timing, the oracle RED and GREEN links (verified: RED concluded failure, GREEN
+concluded success), and the current green gate on both repos. One item is
+honestly pending: the final usabl-app gate link comes after B3, the guarded CI
+re-pin, which is held for approval.
+
 ## E2, final gate and tag (Item 11)
 
 1. Confirm both repos are green: all suites pass, the gate is green, the CI pin
@@ -35,6 +45,15 @@ approval.
   summarizing the six mechanisms (mutation and sensitivity evidence, Orca
   calibration, barrier-days ledger, evidence-bound docs, agent repair study) and
   wiring the voicing lane. Label it v0.3.0 and future. Link the plan doc.
+
+### Status, 2026-08-30
+
+Held. Committing 09-verifier into the plans repo was declined by the workspace
+safety guard as reversing the standing preference to keep specs and plans out of
+shared repositories, together with the earlier decision to leave this doc
+untracked and file it as an issue instead. The doc remains untracked and
+preserved locally. The v0.3.0 issue is drafted and waits on explicit approval,
+alongside B3 and the tag.
 
 ## E4, package distribution note (Item 6)
 
