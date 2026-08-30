@@ -193,4 +193,57 @@ Landed on top of v0.1.0 before this finish began:
   carrying the sentinel. Both fail in the safe direction, so neither blocks the
   honesty bar.
 
+- C1 (docs truth pass + CHANGELOG, item 5) landed as usabl#93. It reconciled the
+  shipped documentation with the code so no doc claims what the engine does not
+  back. Four reconciliations: the how-usabl-works and code-walkthrough pages now
+  name all four evidence classes and keep the rule that only deterministic
+  evidence can change the verdict, matching the EvidenceClass contract; the docs
+  and the receipt docstring now say a receipt binds four things (source tree,
+  policy hash, runner version, scanner versions), matching what verifyReceipt
+  actually compares; the receipt reference now states base revision is recorded
+  for context and is not compared on re-verification; and the walkthrough and
+  ground truth now state the voicing lane is built and exported but not wired
+  into the v0.2.0 run path, landing in v0.3.0. The CHANGELOG gained the full
+  adoption command set and a short note disclosing the foundational commands
+  carried from 0.1.0, including the bypass escape hatch that does not verify,
+  labeled as pre-existing so it makes no false version attribution. The slice
+  also added an offline documentation link checker, run via npm run docs:linkcheck,
+  that validates relative links, local files, and heading anchors without touching
+  the network.
+- The engineer verified the first build independently and found two honesty
+  defects. The builder had removed a `npm run lint` line from the usabl-app
+  contribution guide, calling it a broken reference, but that command exists in
+  usabl-app's package.json; the line was restored to net-zero. The new link
+  checker silently blessed four links that resolve on this filesystem but escape
+  the repo root and would break in a clean clone. That is the tool's own version
+  of recognition that fails toward success, so the fix was to disclose those
+  links as their own category and never bless them, added test-first and verified
+  load-bearing by mutation: breaking the escape guard flipped exactly the one
+  escape test and left the four others green. A missing escaping file still
+  reports broken and exits non-zero, so the checker never fails toward success.
+- The engineering lane then flagged that the CHANGELOG omitted the shipped bypass
+  escape hatch and did not name comment. Before acting, the engineer verified that
+  both commands shipped in v0.1.0, not 0.2.0, and that there is no v0.1.0 CHANGELOG
+  section. The honest fix was therefore a disclosure note, not an Added entry:
+  adding them to the 0.2.0 Added list would have falsely claimed 0.2.0 introduced
+  them, turning the truth pass into a new untruth. The note discloses check,
+  comment, and bypass as carried from 0.1.0, with bypass described accurately
+  against the code as a one-time, next-stop-only marker that skips the next Stop
+  hook. Both review lanes returned satisfied, each re-deriving its own concern
+  rather than taking the fix on faith; full check green, docs:linkcheck green with
+  the four cross-repo escapes disclosed.
+- Residuals tracked rather than spun into another cycle. Four research links in
+  the docs corpus point at ../../research and escape the repo root; they resolve
+  here but would break in a clean clone, so they are a content decision for the
+  docs-site and README work, not a code defect. Two security observations on the
+  new checker are immaterial for a dev-time read-only tool: it resolves symlinks
+  lexically rather than via realpath, and it checks link existence rather than
+  active content. One residual does not fail in the safe direction and is tracked
+  for exactly that reason: the checker extracts inline markdown links and href
+  and src attributes, but not reference-style links or autolinks, so a broken link
+  in one of those forms would pass unnoticed. The current corpus uses neither
+  form, so the gap is latent, but it is a recognition-that-fails-toward-success
+  gap in an honesty tool and belongs on the hardening list, not dismissed as
+  safe-direction.
+
 (append entries as work lands)
