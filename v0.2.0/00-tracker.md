@@ -88,7 +88,7 @@ Everything else is pre-authorized and reviewed as it opens.
 | PR | Repo | Change | Guarded | Status |
 |----|------|--------|---------|--------|
 | B1 | usabl-app | fix demo-wiring test expected SHA, unblock main | no | not started |
-| A1 | usabl | slice 4b floor-notice (paidDownCount across surfaces) | no | not started |
+| A1 | usabl | slice 4b floor-notice (paidDownCount across surfaces) | no | merged (#89) |
 | A2 | usabl | slice 5 routes drift (`usabl drift routes`) | no | not started |
 | A3 | usabl | slices 6a-6d install family + `usabl stop-hook` | no | not started |
 | A4 | usabl | slice 7 `usabl doctor` | no | not started |
