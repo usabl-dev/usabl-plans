@@ -246,4 +246,43 @@ Landed on top of v0.1.0 before this finish began:
   gap in an honesty tool and belongs on the hardening list, not dismissed as
   safe-direction.
 
+- C2 (team-orientation page to v0.2.0) landed as usabl#94. The page is published
+  on public GitHub Pages from main under docs, so it is the first thing a new
+  teammate reads. It was still framed as a countdown to the contest with dated
+  week-by-week cards. The slice replaced that with a team hand-off section that
+  states v0.2.0 is ready to pick up and lays out three date-free onboarding steps,
+  each with an explicit "ready when" line, and renamed the nav item and its anchor
+  from demo to handoff. It added an accessible table of the six adoption commands
+  a teammate actually runs (init, baseline, floor prune, drift routes, install,
+  doctor), each description checked against src/cli.ts and the CHANGELOG, framed
+  by a sentence that keeps the honesty boundary explicit: none of these commands
+  mints a verdict, only the gate does. It pointed teammates at the human-tasks
+  catalogue as plain text rather than a link, because that catalogue lives in the
+  private plans repo and a public page must not ship a link that 404s for the
+  reader. It also carried the claim boundary forward, changing the verified-
+  evidence line to name all four receipt bindings (code, policy, runner, and
+  scanner stack) so the page matches the receipt truth C1 established.
+- The engineer verified the change independently before routing it to review:
+  scope confined to the one HTML file, the Content-Security-Policy meta untouched,
+  no private-repo link, no dangling demo anchor, and docs:linkcheck green (74
+  relative links, zero broken, the four pre-existing cross-repo research escapes
+  unchanged). A working-tree slip during that pass (a stray git checkout of a path
+  from main overwrote the working copy, so a link count briefly read one low) was
+  caught by the count regression and restored from HEAD; the commit itself was
+  never touched.
+- Two lanes reviewed without pre-shared findings: one for content, honesty, and
+  the page's own accessibility, one for security. The content lane confirmed each
+  command description against the code (the four receipt bindings at
+  receipt.ts, the install target flags and the read-only branch-rule reader at
+  cli.ts), that every anchor and aria-labelledby target resolves with no skipped
+  heading levels, and that the new command table is a keyboard-reachable labelled
+  region with scoped header cells. The security lane confirmed the CSP still
+  forbids scripts and connections, that nothing active or external was added, and
+  that the private plans repo appears only as plain text. Both returned satisfied.
+  Both raised the same one non-blocking nit: the page named the rehearsal
+  "two-owner" while the catalogue heading calls it "two-operator." Because the
+  page points a reader at that catalogue, the term was aligned to the catalogue so
+  the entry is findable rather than shipped as a known drift. Final state: full
+  check green in CI, docs:linkcheck green.
+
 (append entries as work lands)
