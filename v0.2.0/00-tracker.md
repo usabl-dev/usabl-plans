@@ -89,7 +89,7 @@ Everything else is pre-authorized and reviewed as it opens.
 |----|------|--------|---------|--------|
 | B1 | usabl-app | fix demo-wiring test expected SHA, unblock main | no | merged (#22) |
 | A1 | usabl | slice 4b floor-notice (paidDownCount across surfaces) | no | merged (#89) |
-| A2 | usabl | slice 5 routes drift (`usabl drift routes`) | no | in progress |
+| A2 | usabl | slice 5 routes drift (`usabl drift routes`) | no | merged (#90) |
 | A3 | usabl | slices 6a-6d install family + `usabl stop-hook` | no | not started |
 | A4 | usabl | slice 7 `usabl doctor` | no | not started |
 | C1 | usabl | Item 5 docs truth pass + CHANGELOG | no | not started |

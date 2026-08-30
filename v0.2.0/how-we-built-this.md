@@ -80,5 +80,24 @@ Landed on top of v0.1.0 before this finish began:
   CI logs. Both went back to the builder as one consolidated rework: refuse with
   a manual step when discovery is empty, make an unreadable router refuse rather
   than crash, and neutralize printed URLs.
+- A2 landed as usabl#90 after a second review round. The reviewer confirmed the
+  empty-discovery refusal but found that the same honesty failure survived just
+  under the zero-match line: a router mixing parseable and unparseable paths
+  discovered only the parseable ones and reported the rest as confident
+  removals. The security lane separately found a second egress: the router file
+  name, which a pull-request author controls through the committed config, was
+  printed to stderr without the neutralizer. Rather than patch the symptoms, the
+  rework fixed the root cause both lanes had circled. The fallback parser now
+  reads the object-property route form (path: '/home') used by the React Router
+  data-router API, so mainstream modern routers are compared instead of refused;
+  the router file name is neutralized in both refusal messages; and the report
+  carries a plain-English caveat that routes usabl cannot statically parse can
+  appear as false removals. The duplicate-path crash was also removed. Both
+  lanes then returned resolved, and the exit-code contract, the honesty guards,
+  and the new parser branch were each mutation-tested (removing a guard fails its
+  test). Final state: 500 tests, full check green. Two residuals are tracked as
+  their own single-purpose follow-ups rather than bundled into the feature: bidi
+  control characters in the shared neutralizer, and a symmetric added-route
+  caveat. Both fail in the safe direction, so neither blocks the honesty bar.
 
 (append entries as work lands)
