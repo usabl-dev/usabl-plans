@@ -400,23 +400,35 @@ Landed on top of v0.1.0 before this finish began:
   locally: committing it into the shared repo was declined as reversing the
   standing preference to keep specs and plans out of shared code repositories, so
   the issue carries the scope instead of the file.
-- B3, the guarded CI re-pin, is built and verified but blocked by usabl's own
-  guarded-path control, which is the honest outcome. The change is exactly three
-  engine-SHA occurrences, from the old pin to the frozen v0.2.0 commit
-  51a9ce3: two in the gate workflow and the duplicated pin in the demo-wiring
-  test. The finishing engineer read the diff and confirmed only those three
-  lines; the security lane returned clean. Continuous integration then ran the
-  gate, which reported the accessibility surface idle, no UI-touching diff, and
-  correctly returned approval-required because the change edits a guarded path.
-  The gate requires a code-owner review of the head from someone other than the
-  pull-request author. The sole code owner is also the author, and a code owner
-  cannot approve their own pull request, so the merge cannot clear the gate
-  without a deliberate human decision on how to satisfy the two-person control.
-  This is the security model proving itself on the release critical path, not a
-  defect. It is surfaced for a human decision rather than forced green.
-- Remaining before the tag: unblock B3 by a human decision on the two-person
-  control, then E2, the tag on both repos, which also requires explicit approval.
-  E4, the package-distribution recommendation, is unchanged: keep the private
-  pinned-checkout for v0.2.0 and defer npm publish to a human task.
+- B3, the guarded CI re-pin, is merged. The change is exactly three engine-SHA
+  occurrences, from the old pre-v0.2.0 pin to the frozen v0.2.0 commit 51a9ce3:
+  two in the gate workflow and the duplicated pin in the demo-wiring test. The
+  finishing engineer read the diff and confirmed only those three lines; the
+  security lane returned clean. Continuous integration ran the gate, which
+  reported the accessibility surface idle, no UI-touching diff, and correctly
+  returned approval-required because the change edits a guarded path. The gate
+  requires a code-owner review of the head from someone other than the
+  pull-request author; the sole code owner is also the author, and a code owner
+  cannot approve their own pull request, so the two-person control could not be
+  satisfied here. This was surfaced for a human decision rather than forced
+  green. On explicit approval to admin-override, the merge was made surgical and
+  reversible: the branch ruleset was snapshotted, set to evaluate for the merge,
+  then restored to active and confirmed byte-for-byte identical, with bypass
+  actors still empty. The squash commit body records that it was an admin
+  override and why. Merged main is 09d92aa; the app suite is green, 21 tests,
+  typecheck and lint clean, with all three pins now at 51a9ce3. This is the
+  security model proving itself on the release critical path, not a defect.
+- E2, the tag, is done. v0.2.0 is tagged on both repos as annotated tags: usabl
+  v0.2.0 points to engine commit 51a9ce3, and usabl-app v0.2.0 points to fixture
+  commit 09d92aa. Before tagging, the exact commits, both green suites, the green
+  gate, and the recovery method were confirmed and recorded: the engine main was
+  at 51a9ce3 with its last CI run concluding success, and the app suite was green
+  at 09d92aa with CI pinning that engine. The engine did not advance past the
+  tagged commit, so v0.2.0 was cut straight from v0.2.0-rc.1. This closes the
+  v0.2.0 finish.
+- E4, the package-distribution recommendation, is unchanged: keep the private
+  pinned-checkout for v0.2.0 and defer npm publish to a human task. Follow-on is
+  the v0.2.1-and-later human testing catalogued in human-tasks.md, and the
+  v0.3.0 verifier work held in usabl-dev/usabl#96.
 
 (append entries as work lands)

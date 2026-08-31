@@ -37,6 +37,18 @@ tag, both suites green, the gate green, the evidence bundle complete, and the
 recovery method (delete the tag and re-cut if wrong). Tag only on explicit
 approval.
 
+### Status, 2026-08-31
+
+Done. v0.2.0 is tagged on both repos as annotated tags. usabl v0.2.0 points to
+engine commit 51a9ce3, its main; the engine suite is green and the last main CI
+run concluded success. usabl-app v0.2.0 points to fixture commit 09d92aa, the
+merge of B3, with the app suite green at that commit and CI pinning the frozen
+engine 51a9ce3. The engine did not advance past the tagged commit, so v0.2.0 was
+cut straight from v0.2.0-rc.1. Recovery, if ever needed: delete the tag ref and
+re-cut. This closes the v0.2.0 finish. Remaining follow-on is v0.2.1 and later
+human testing, catalogued in human-tasks.md, and the v0.3.0 verifier work held
+in usabl-dev/usabl#96.
+
 ## E3, 09-verifier to v0.3.0
 
 - Commit `09-verifier-evidence-and-outcomes.md` to usabl-plans so it is preserved
