@@ -1,0 +1,5 @@
+# usabl planning repo. Every file here is governance and planning content, so the
+# whole tree is owned. Individual logins only: the usabl-dev org has no teams, so an
+# "@usabl-dev/<name>" team entry would resolve to nobody. Each owner must have write
+# access to this repo or GitHub ignores the entry.
+* @eparenti @nitin-dhevar @vishsanghishetty
