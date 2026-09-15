@@ -9,7 +9,7 @@ freelances someone else's job.
 
 ## Founder (human)
 
-Ed is founder, chief of product, and UX lead until more humans join.
+The founder is also chief of product and UX lead until more humans join.
 
 - Owns: vision, operator story, what ships, what "good" feels like to a person using
   this on Monday.

@@ -10,7 +10,7 @@ Engine `main` at spec time: `1dc0ed8` (`js-yaml` 4.3.1, #45).
 
 ## Goal
 
-A teammate, without Ed in the room, can:
+A teammate, without the founder in the room, can:
 
 1. Clone `usabl` and `usabl-app` as siblings, install, and build.
 2. Feel the hero bug in the browser (modal focus not returned on close).
